@@ -1,0 +1,201 @@
+@import "tailwindcss";
+
+/* ─── Design Tokens ────────────────────────────────────────────────────────── */
+:root {
+  /* Backgrounds */
+  --bg-canvas:  #000000;
+  --bg-app:     #110508;
+  --bg-panel:   #0a0a0a;
+  --bg-node:    #111111;
+
+  /* Accent */
+  --accent:     #f97316;
+  --accent-2:   #8f0e2e;
+
+  /* Borders */
+  --border:         rgba(255, 255, 255, 0.10);
+  --border-panel:   rgba(255, 255, 255, 0.22);
+  --border-subtle:  rgba(255, 255, 255, 0.06);
+  --border-node:    rgba(255, 255, 255, 0.20);
+
+  /* Text */
+  --text-1: rgba(255, 255, 255, 0.85);
+  --text-2: rgba(255, 255, 255, 0.60);
+  --text-3: rgba(255, 255, 255, 0.30);
+  --text-4: rgba(255, 255, 255, 0.20);
+
+  /* Panel layout */
+  --panel-px:  1.5rem;  /* horizontal padding */
+  --panel-pt:  24px;    /* top padding */
+  --panel-pb:  24px;    /* bottom padding */
+  --panel-gap: 6px;     /* gap between chips */
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+
+  /* Typography */
+  --font-xs:   11px;
+  --font-sm:   12px;
+  --font-base: 13px;
+}
+
+/* ─── Component Classes ────────────────────────────────────────────────────── */
+@layer components {
+
+  /* Floating glass panel — used by PromptBuilder, modals */
+  .rm-panel {
+    background: rgba(8, 8, 10, 0.55);
+    backdrop-filter: blur(32px) saturate(180%);
+    border: 1px solid var(--border-panel);
+    border-radius: var(--radius-2xl);
+    box-shadow:
+      0 25px 50px -12px rgba(0, 0, 0, 0.8),
+      inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    overflow: hidden;
+  }
+
+  /* Image node card */
+  .rm-node {
+    background: var(--bg-node);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-node);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+  }
+
+  .rm-node.selected {
+    border-color: var(--accent);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8),
+                0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+
+  /* Clickable phrase chip — image node tags */
+  .rm-chip {
+    display: inline-flex;
+    align-items: center;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-2);
+    font-size: var(--font-xs);
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: background 120ms, color 120ms, border-color 120ms;
+  }
+
+  .rm-chip:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.80);
+  }
+
+  .rm-chip.is-active {
+    background: rgba(249, 115, 22, 0.28);
+    color: #fed7aa;
+    border-color: rgba(251, 146, 60, 0.45);
+    box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.28);
+  }
+
+  /* Draggable chip — Prompt Builder */
+  .rm-builder-chip {
+    display: inline-flex;
+    align-items: center;
+    border-radius: var(--radius-lg);
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.10);
+    color: rgba(255, 255, 255, 0.90);
+    font-size: var(--font-sm);
+    cursor: grab;
+    user-select: none;
+    transition: background 120ms, color 120ms, opacity 120ms;
+  }
+
+  .rm-builder-chip:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: rgba(255, 255, 255, 1);
+  }
+
+  .rm-builder-chip:active {
+    cursor: grabbing;
+  }
+
+}
+
+/* ─── Modal Animations ──────────────────────────────────────────────────────── */
+@keyframes backdrop-in {
+  from { background: transparent; }
+  to   { background: rgba(0, 0, 0, 0.20); }
+}
+
+@keyframes backdrop-out {
+  from { background: rgba(0, 0, 0, 0.20); }
+  to   { background: transparent; }
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: scale(0.95) translateY(-6px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes modal-out {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(0.96) translateY(-4px); }
+}
+
+.rm-backdrop        { animation: backdrop-in  140ms ease-out forwards; }
+.rm-backdrop-out    { animation: backdrop-out 160ms ease-in  forwards; }
+.rm-modal-enter     { animation: modal-in  160ms cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.rm-modal-exit      { animation: modal-out 130ms ease-in forwards; }
+
+/* ─── Window Drag Regions ───────────────────────────────────────────────────── */
+.drag-region   { -webkit-app-region: drag; }
+.no-drag-region { -webkit-app-region: no-drag; }
+
+/* ─── Global Reset ──────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: var(--bg-canvas);
+  color: var(--text-1);
+  user-select: none;
+}
+
+/* Allow text selection inside inputs and editable areas */
+input, textarea, [contenteditable] {
+  user-select: text;
+}
+
+/* React Flow overrides */
+.react-flow__pane  { cursor: default; }
+.react-flow__node  { cursor: default; }
+.react-flow__node.selected,
+.react-flow__node.selected:focus,
+.react-flow__node.selected:focus-visible { outline: none !important; box-shadow: none !important; }
+
+/* Group node — remove React Flow default background/border */
+.react-flow__node-groupNode {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }

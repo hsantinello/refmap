@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir \"E:\\\\CLAUDE\\\\REFMAP\\\\.claude\")",
+      "Bash(mkdir \"E:\\\\CLAUDE\\\\REFMAP\\\\.claude\\\\commands\")"
+    ]
+  }
+}
