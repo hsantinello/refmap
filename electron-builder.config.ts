@@ -5,6 +5,18 @@ export default defineConfig({
   productName: 'Ref Map',
   copyright: 'Copyright © 2026',
 
+  // GitHub Releases as the auto-update source.
+  // Set owner/repo to match your GitHub repository.
+  // To publish: GH_TOKEN=<your_token> npm run dist:win:publish
+  publish: [
+    {
+      provider: 'github',
+      owner: 'hsantinello',
+      repo: 'refmap',
+      releaseType: 'release',
+    },
+  ],
+
   directories: {
     output: 'dist-release',
     buildResources: 'build',

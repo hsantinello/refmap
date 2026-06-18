@@ -1,6 +1,10 @@
-import { ipcMain, dialog, safeStorage, BrowserWindow, shell } from 'electron'
+import { ipcMain, dialog, safeStorage, BrowserWindow, shell, app } from 'electron'
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
+import sharp from 'sharp'
+import crypto from 'crypto'
+import fs from 'fs'
+import path from 'path'
 import { canvasQueries, nodeQueries, tagQueries, settingQueries, aiCacheQueries } from '../db'
 import { extractMetadata } from '../metadata'
 import { analyzeWithAnthropic } from '../ai/anthropic'
@@ -31,6 +35,32 @@ export function registerHandlers(win: BrowserWindow): void {
     return result.filePaths
   })
 
+  // ── Clipboard image ────────────────────────────────────────────────────
+  ipcMain.handle('clipboard:readImage', async (): Promise<string | null> => {
+    const { clipboard, nativeImage } = await import('electron')
+    const img = clipboard.readImage()
+    if (img.isEmpty()) return null
+    const tmpDir = path.join(app.getPath('temp'), 'refmap-paste')
+    fs.mkdirSync(tmpDir, { recursive: true })
+    const tmpPath = path.join(tmpDir, `paste-${Date.now()}.png`)
+    fs.writeFileSync(tmpPath, img.toPNG())
+    return tmpPath
+  })
+
+  // ── Thumbnail generation ───────────────────────────────────────────────
+  ipcMain.handle('image:createThumbnail', async (_e, imagePath: string): Promise<string> => {
+    const thumbDir = path.join(app.getPath('userData'), 'thumbnails')
+    const hash = crypto.createHash('md5').update(imagePath).digest('hex')
+    const thumbPath = path.join(thumbDir, `${hash}.jpg`)
+    if (!fs.existsSync(thumbPath)) {
+      await sharp(imagePath)
+        .resize(900, 900, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 88 })
+        .toFile(thumbPath)
+    }
+    return thumbPath
+  })
+
   // ── Metadata extraction ────────────────────────────────────────────────
   ipcMain.handle('image:extractMetadata', async (_e, imagePath: string) => {
     return await extractMetadata(imagePath)
@@ -42,13 +72,50 @@ export function registerHandlers(win: BrowserWindow): void {
     if (cached && typeof cached === 'string' && /\{[^}]+\}/.test(cached)) return cached
 
     const provider = settingQueries.get('aiProvider') || 'anthropic'
-    const encryptedKey = settingQueries.get(`apiKey_${provider}`)
+
+    const encryptedActive = settingQueries.get(`apiKey_${provider}`)
+    const encryptedAnthropic = settingQueries.get('apiKey_anthropic')
+    const encryptedOpenAI = settingQueries.get('apiKey_openai')
+
+    // Resolve which key to use for vision — Together AI has no serverless vision models,
+    // so fall back to Anthropic or OpenAI for image analysis
+    const encryptedKey = encryptedActive || encryptedAnthropic || encryptedOpenAI
     if (!encryptedKey) throw new Error('API key not configured')
 
     const apiKey = safeStorage.decryptString(Buffer.from(encryptedKey, 'hex'))
-    const tags = provider === 'anthropic'
-      ? await analyzeWithAnthropic(imagePath, apiKey)
-      : await analyzeWithOpenAI(imagePath, apiKey)
+    const isTogetherKey = apiKey.startsWith('tgp_')
+
+    let tags: string
+    if (isTogetherKey) {
+      // Try Together AI vision models in order until one works
+      const togetherVisionModels = [
+        'google/gemma-3n-E4B-it',
+        'meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo',
+      ]
+      tags = ''
+      for (const model of togetherVisionModels) {
+        try {
+          tags = await analyzeWithOpenAI(imagePath, apiKey, {
+            baseURL: 'https://api.together.xyz/v1',
+            model,
+          })
+          if (tags) break
+        } catch { /* try next */ }
+      }
+      // Together AI vision failed — fall back to Anthropic or OpenAI if available
+      if (!tags) {
+        const fallbackEncrypted = encryptedAnthropic || encryptedOpenAI
+        if (!fallbackEncrypted) throw new Error('Nenhum modelo de visão disponível. Configure uma chave OpenAI ou Anthropic.')
+        const fallbackKey = safeStorage.decryptString(Buffer.from(fallbackEncrypted, 'hex'))
+        tags = encryptedAnthropic
+          ? await analyzeWithAnthropic(imagePath, fallbackKey)
+          : await analyzeWithOpenAI(imagePath, fallbackKey)
+      }
+    } else if (provider === 'anthropic') {
+      tags = await analyzeWithAnthropic(imagePath, apiKey)
+    } else {
+      tags = await analyzeWithOpenAI(imagePath, apiKey)
+    }
 
     aiCacheQueries.set(imagePath, tags)
     return tags
@@ -63,27 +130,142 @@ export function registerHandlers(win: BrowserWindow): void {
     const encryptedKey = settingQueries.get(`apiKey_${provider}`)
     if (!encryptedKey) throw new Error('API key not configured')
     const apiKey = safeStorage.decryptString(Buffer.from(encryptedKey, 'hex'))
+    // Together AI keys start with "tgp_" — auto-route regardless of which slot they were saved in
+    const effectiveProvider = apiKey.startsWith('tgp_') ? 'together' : provider
 
-    if (provider === 'anthropic') {
+    // Remove markdown/special characters from the prompt
+    const cleanPrompt = (text: string): string =>
+      text
+        .replace(/^#{1,6}\s+/gm, '')       // ## headers at line start
+        .replace(/#/g, '')                 // any remaining # chars
+        .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')  // **bold**, *italic*, ***both***
+        .replace(/_{1,2}([^_]+)_{1,2}/g, '$1')    // __bold__, _italic_
+        .replace(/`([^`]+)`/g, '$1')        // `code`
+        .replace(/^\s*[-*+]\s+/gm, '')      // bullet points at start of line
+        .replace(/^\s*\d+\.\s+/gm, '')      // numbered lists at start of line
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // [link](url)
+        .replace(/\n{3,}/g, '\n\n')         // max 2 consecutive blank lines
+        .trim()
+
+    // Strip any introductory lines the model might prepend before the actual prompt
+    const stripIntro = (text: string): string => {
+      const lines = text.split('\n')
+      // Patterns that indicate an intro/header line
+      const introRe = /^(\*{1,2})?((here'?s?|aqui (est[aá]|vai)|voici|here is|below is|optimized prompt|prompt otimizado|prompt for|otimizado para|resultado|result|output|the (optimized|following|result)|segue)(\*{1,2})?[^a-z]*:?|#{1,3}\s)/i
+      // Also strip lines that are entirely a header followed by optional colon (< 120 chars, no sentence structure)
+      const isHeaderLine = (l: string) => introRe.test(l) || (l.endsWith(':') && l.length < 120 && !/[.!?]/.test(l.slice(0, -1)))
+      let start = 0
+      for (let i = 0; i < Math.min(lines.length, 5); i++) {
+        const line = lines[i].trim()
+        if (!line) { start = i + 1; continue }
+        if (isHeaderLine(line)) { start = i + 1 }
+        else break
+      }
+      // Also remove markdown bold headers anywhere in the first line
+      let result = lines.slice(start).join('\n').trim()
+      result = result.replace(/^\*\*[^*]{1,80}\*\*\n+/, '')
+      return result
+    }
+
+    const userMsg = `Optimize this prompt for ${config.label}. Return the result in English only, regardless of the input language. Return ONLY the prompt, no introduction, no explanation:\n\n${prompt}`
+
+    if (effectiveProvider === 'anthropic') {
       const client = new Anthropic({ apiKey })
       const message = await client.messages.create({
-        model: 'claude-haiku-4-5',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 1024,
         system: config.systemPrompt,
-        messages: [{ role: 'user', content: `Otimize este prompt para ${config.label}:\n\n${prompt}` }],
+        messages: [{ role: 'user', content: userMsg }],
       })
       const block = message.content[0]
-      return block?.type === 'text' ? block.text.trim() : ''
+      const raw = block?.type === 'text' ? block.text.trim() : ''
+      return cleanPrompt(stripIntro(raw.replace(/\\n/g, '\n')))
     } else {
-      const client = new OpenAI({ apiKey })
+      const client = effectiveProvider === 'together'
+        ? new OpenAI({ apiKey, baseURL: 'https://api.together.xyz/v1' })
+        : new OpenAI({ apiKey })
+      const model = effectiveProvider === 'together' ? 'meta-llama/Llama-3.3-70B-Instruct-Turbo' : 'gpt-4o-mini'
       const completion = await client.chat.completions.create({
-        model: 'gpt-4o-mini',
+        model,
         messages: [
           { role: 'system', content: config.systemPrompt },
-          { role: 'user', content: `Otimize este prompt para ${config.label}:\n\n${prompt}` },
+          { role: 'user', content: userMsg },
         ],
       })
-      return completion.choices[0].message.content?.trim() ?? ''
+      return cleanPrompt(stripIntro((completion.choices[0].message.content?.trim() ?? '').replace(/\\n/g, '\n')))
+    }
+  })
+
+  // ── Tag translation ───────────────────────────────────────────────────
+  ipcMain.handle('tags:translate', async (_e, values: string[], targetLang: 'pt' | 'en') => {
+    const provider = settingQueries.get('aiProvider') || 'anthropic'
+    const encryptedKey = settingQueries.get(`apiKey_${provider}`)
+    if (!encryptedKey) throw new Error('API key not configured')
+    const apiKey = safeStorage.decryptString(Buffer.from(encryptedKey, 'hex'))
+    const effectiveProvider = apiKey.startsWith('tgp_') ? 'together' : provider
+
+    const langLabel = targetLang === 'pt' ? 'Brazilian Portuguese' : 'English'
+    const prompt = `Translate each of the following image generation prompt tags to ${langLabel}. Return ONLY a JSON array of strings in the same order, no explanation:\n${JSON.stringify(values)}`
+
+    let raw = ''
+    if (effectiveProvider === 'anthropic') {
+      const client = new Anthropic({ apiKey })
+      const msg = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+      })
+      const block = msg.content[0]
+      raw = block?.type === 'text' ? block.text.trim() : '[]'
+    } else {
+      const client = effectiveProvider === 'together'
+        ? new OpenAI({ apiKey, baseURL: 'https://api.together.xyz/v1' })
+        : new OpenAI({ apiKey })
+      const model = effectiveProvider === 'together' ? 'meta-llama/Llama-3.3-70B-Instruct-Turbo' : 'gpt-4o-mini'
+      const completion = await client.chat.completions.create({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+      })
+      raw = completion.choices[0].message.content?.trim() ?? '[]'
+    }
+
+    const match = raw.match(/\[[\s\S]*\]/)
+    return match ? JSON.parse(match[0]) as string[] : values
+  })
+
+  // ── Speech transcription (Whisper) ────────────────────────────────────
+  ipcMain.handle('speech:transcribe', async (_e, audioData: Uint8Array) => {
+    // Try active provider key first; fall back to explicit openai key
+    const provider = settingQueries.get('aiProvider') || 'anthropic'
+    const encryptedActive = provider !== 'anthropic' ? settingQueries.get(`apiKey_${provider}`) : null
+    const encryptedOpenAI = settingQueries.get('apiKey_openai')
+
+    let apiKey = ''
+    if (encryptedActive) {
+      try { apiKey = safeStorage.decryptString(Buffer.from(encryptedActive, 'hex')) } catch {}
+    }
+    if (!apiKey?.trim() && encryptedOpenAI) {
+      try { apiKey = safeStorage.decryptString(Buffer.from(encryptedOpenAI, 'hex')) } catch {}
+    }
+    if (!apiKey?.trim()) throw new Error('NO_OPENAI_KEY')
+
+    const isTogetherKey = apiKey.startsWith('tgp_')
+    const client = isTogetherKey
+      ? new OpenAI({ apiKey, baseURL: 'https://api.together.xyz/v1' })
+      : new OpenAI({ apiKey })
+    const model = isTogetherKey ? 'openai/whisper-large-v3' : 'whisper-1'
+
+    const tempPath = path.join(app.getPath('temp'), `refmap-speech-${Date.now()}.webm`)
+    try {
+      fs.writeFileSync(tempPath, Buffer.from(audioData))
+      const result = await client.audio.transcriptions.create({
+        file: fs.createReadStream(tempPath),
+        model,
+        language: 'pt',
+      })
+      return result.text
+    } finally {
+      try { fs.unlinkSync(tempPath) } catch {}
     }
   })
 
@@ -116,15 +298,43 @@ export function registerHandlers(win: BrowserWindow): void {
   })
 
   // ── Canvas file export/import ──────────────────────────────────────────
+  // ── Auto-backup (no dialog — saves to userData/backups) ──────────────────
+  ipcMain.handle('canvas:autoBackup', async (_e, data: { name: string; nodes: unknown[]; tags: unknown[] }) => {
+    try {
+      const { app } = require('electron') as typeof import('electron')
+      const path = require('path') as typeof import('path')
+      const fs   = require('fs')   as typeof import('fs')
+      const backupDir = path.join(app.getPath('userData'), 'backups')
+      fs.mkdirSync(backupDir, { recursive: true })
+      const ts       = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+      const safeName = data.name.replace(/[^a-z0-9]/gi, '_')
+      const filepath = path.join(backupDir, `${safeName}_${ts}.refmap`)
+      fs.writeFileSync(filepath, JSON.stringify({ version: 1, ...data }, null, 2), 'utf-8')
+      // Keep only last 5 backups per canvas
+      const all = fs.readdirSync(backupDir).filter((f: string) => f.startsWith(safeName)).sort()
+      for (const old of all.slice(0, -5)) fs.unlinkSync(path.join(backupDir, old))
+      return filepath
+    } catch (err) { console.error('[autoBackup]', err); return null }
+  })
+
+  // Save directly to a known path (no dialog) — used by Ctrl+S
+  ipcMain.handle('canvas:saveToPath', async (_e, filePath: string, data: { name: string; nodes: unknown[]; tags: unknown[] }) => {
+    try {
+      const fs = require('fs') as typeof import('fs')
+      fs.writeFileSync(filePath, JSON.stringify({ version: 1, ...data }, null, 2), 'utf-8')
+      return true
+    } catch (err) { console.error('[saveToPath]', err); return false }
+  })
+
   ipcMain.handle('canvas:exportFile', async (_e, data: { name: string; nodes: unknown[]; tags: unknown[] }) => {
     const result = await dialog.showSaveDialog(win, {
       defaultPath: `${data.name}.refmap`,
       filters: [{ name: 'Ref Map Canvas', extensions: ['refmap'] }],
     })
-    if (result.canceled || !result.filePath) return false
+    if (result.canceled || !result.filePath) return null
     const fs = require('fs') as typeof import('fs')
     fs.writeFileSync(result.filePath, JSON.stringify({ version: 1, ...data }, null, 2), 'utf-8')
-    return true
+    return result.filePath  // return path so caller can remember it
   })
 
   ipcMain.handle('canvas:openFile', async () => {
@@ -155,6 +365,12 @@ export function registerHandlers(win: BrowserWindow): void {
   })
   ipcMain.handle('node:updateMetadata', (_e, id: string, source: string, modelName?: string) => {
     nodeQueries.updateMetadata(id, source, modelName)
+  })
+  ipcMain.handle('node:updateThumbnail', (_e, id: string, thumbPath: string) => {
+    nodeQueries.updateThumbnail(id, thumbPath)
+  })
+  ipcMain.handle('node:setStarred', (_e, id: string, starred: boolean) => {
+    nodeQueries.setStarred(id, starred)
   })
   ipcMain.handle('node:updatePosition', (_e, id: string, x: number, y: number) => {
     nodeQueries.updatePosition(id, x, y)

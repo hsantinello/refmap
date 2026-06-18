@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg:     #080305;
+    --red:    #BE123C;
+    --orange: #F97316;
+    --gold:   #FDBA74;
+    --border: rgba(255,255,255,0.07);
+    --muted:  rgba(255,255,255,0.42);
+  }
+  html { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: rgba(255,255,255,0.85); font-size: 13px; }
+  @page { size: A4; margin: 0; }
+
+  .page {
+    width: 794px; height: 1123px;
+    position: relative; overflow: hidden;
+    break-after: page; page-break-after: always;
+    background: var(--bg);
+  }
+  .page:last-child { break-after: avoid; page-break-after: avoid; }
+
+  /* ── COVER ── */
+  .cover {
+    background: radial-gradient(ellipse at 45% 38%, #1c0609 0%, #0d0407 55%, #080305 100%);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 1123px; gap: 0;
+  }
+  .logo-box {
+    width: 88px; height: 88px; border-radius: 24px; margin-bottom: 32px;
+    background: linear-gradient(135deg, #BE123C, #F97316, #FDBA74);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 60px rgba(190,18,60,0.3), 0 0 100px rgba(249,115,22,0.15);
+  }
+  .cover h1 {
+    font-size: 52px; font-weight: 800; letter-spacing: -1.5px;
+    background: linear-gradient(135deg, #fff 20%, #FDBA74 60%, #F97316);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    margin-bottom: 10px; text-align: center;
+  }
+  .cover .sub { font-size: 16px; color: rgba(255,255,255,0.35); margin-bottom: 56px; text-align: center; }
+  .cover-divider { width: 120px; height: 1px; background: linear-gradient(90deg, transparent, var(--orange), transparent); margin-bottom: 40px; }
+  .cover-desc {
+    max-width: 420px; text-align: center;
+    font-size: 14px; color: rgba(255,255,255,0.3); line-height: 1.7;
+    margin-bottom: 48px;
+  }
+  .cover-desc strong { color: rgba(255,255,255,0.6); font-weight: 500; }
+  .cover-badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: rgba(249,115,22,0.1); border: 1px solid rgba(249,115,22,0.2);
+    border-radius: 100px; padding: 6px 18px;
+    font-size: 11px; font-weight: 600; color: var(--gold); letter-spacing: 0.07em; text-transform: uppercase;
+  }
+
+  /* ── INNER ── */
+  .inner { padding: 52px 60px; height: 1123px; display: flex; flex-direction: column; }
+  .ph { display: flex; justify-content: space-between; align-items: center; padding-bottom: 18px; border-bottom: 1px solid var(--border); margin-bottom: 32px; }
+  .ph .lbl { font-size: 9.5px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--orange); }
+  .ph .num { font-size: 9.5px; color: rgba(255,255,255,0.18); }
+
+  h2 { font-size: 28px; font-weight: 800; letter-spacing: -0.6px; margin-bottom: 8px; }
+  .lead { font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 32px; }
+
+  /* Steps */
+  .steps { display: flex; flex-direction: column; gap: 0; margin-bottom: 28px; }
+  .step { display: flex; gap: 18px; position: relative; padding-bottom: 24px; }
+  .step:last-child { padding-bottom: 0; }
+  .step-left { display: flex; flex-direction: column; align-items: center; }
+  .step-num {
+    width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700;
+    background: linear-gradient(135deg, var(--red), var(--orange));
+    color: #fff;
+  }
+  .step-line { flex: 1; width: 1px; background: rgba(255,255,255,0.07); margin: 6px 0; min-height: 16px; }
+  .step:last-child .step-line { display: none; }
+  .step-content { flex: 1; padding-top: 6px; }
+  .step-title { font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 5px; }
+  .step-desc { font-size: 12px; color: var(--muted); line-height: 1.65; }
+  .step-desc strong { color: var(--gold); font-weight: 600; }
+
+  /* Divider */
+  .divider { height: 1px; background: linear-gradient(90deg, rgba(249,115,22,0.4), transparent); margin-bottom: 28px; }
+
+  /* Two-col */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  /* Block */
+  .block { background: rgba(255,255,255,0.025); border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px; }
+  .block-title { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--orange); margin-bottom: 14px; }
+
+  /* Shortcut rows */
+  .sk { display: flex; justify-content: space-between; align-items: center; padding: 7.5px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .sk:last-child { border-bottom: none; padding-bottom: 0; }
+  .sk:first-child { padding-top: 0; }
+  .sk-action { font-size: 12px; color: var(--muted); }
+  .k { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12); border-radius: 5px; padding: 2px 8px; font-size: 10.5px; font-weight: 600; color: rgba(255,255,255,0.65); font-family: monospace; display: inline-block; margin-left: 3px; }
+
+  /* Tips */
+  .tip { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .tip:last-child { border-bottom: none; }
+  .tip-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--orange); flex-shrink: 0; margin-top: 5px; }
+  .tip-text { font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .tip-text strong { color: rgba(255,255,255,0.75); font-weight: 600; }
+
+  /* Footer */
+  .pf { margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .pf-brand { font-size: 11px; font-weight: 700; background: linear-gradient(90deg, var(--orange), var(--gold)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .pf-note { font-size: 10px; color: rgba(255,255,255,0.18); }
+
+  /* accent */
+  .accent { height: 2px; border-radius: 2px; background: linear-gradient(90deg, var(--red), var(--orange), var(--gold)); margin-bottom: 28px; }
+
+  /* tag */
+  .tag { display: inline-flex; background: rgba(249,115,22,0.12); border: 1px solid rgba(249,115,22,0.22); border-radius: 5px; padding: 2px 9px; font-size: 11px; font-weight: 500; color: var(--gold); margin: 2px; }
+</style>
+</head>
+<body>
+
+<!-- ══ CAPA ══════════════════════════════════════════ -->
+<div class="page cover">
+  <div style="position:absolute;width:500px;height:500px;border-radius:50%;filter:blur(100px);background:radial-gradient(#BE123C2a,transparent 70%);top:-120px;left:-100px"></div>
+  <div style="position:absolute;width:350px;height:350px;border-radius:50%;filter:blur(90px);background:radial-gradient(#F9731620,transparent 70%);bottom:-60px;right:40px"></div>
+
+  <div class="logo-box">
+    <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+      <path d="M8 30L24 8L40 30" stroke="white" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+      <path d="M8 30L24 40L40 30" stroke="white" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.65"/>
+      <circle cx="24" cy="24" r="4.5" fill="white" opacity="0.95"/>
+      <circle cx="11" cy="31" r="2.8" fill="white" opacity="0.5"/>
+      <circle cx="37" cy="31" r="2.8" fill="white" opacity="0.5"/>
+    </svg>
+  </div>
+
+  <h1>Ref Map</h1>
+  <p class="sub">Extraia metadados. Construa melhores prompts.</p>
+  <div class="cover-divider"></div>
+
+  <p class="cover-desc">
+    Importe suas imagens de referência de IA, veja todos os parâmetros usados na geração e
+    <strong>monte seu próximo prompt em segundos</strong> — tudo em um só lugar.
+  </p>
+
+  <div class="cover-badge">✦ Guia para novos usuários</div>
+</div>
+
+<!-- ══ PÁGINA 1: PRIMEIROS PASSOS ═══════════════════ -->
+<div class="page">
+<div class="inner">
+  <div class="ph"><span class="lbl">Primeiros passos</span><span class="num">01 / 02</span></div>
+
+  <h2>Como usar o Ref Map</h2>
+  <p class="lead">Em três passos você vai da imagem ao prompt pronto para usar no seu gerador de IA.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-left"><div class="step-num">1</div><div class="step-line"></div></div>
+      <div class="step-content">
+        <div class="step-title">Importe suas imagens de referência</div>
+        <div class="step-desc">
+          Arraste imagens diretamente para o canvas, ou clique em <strong>+ Importar</strong> na barra superior.<br>
+          O app aceita <strong>PNG, JPG e WEBP</strong> gerados por qualquer ferramenta de IA — ComfyUI, Midjourney, A1111, FLUX e outras.
+        </div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-left"><div class="step-num">2</div><div class="step-line"></div></div>
+      <div class="step-content">
+        <div class="step-title">Clique em uma imagem para ver seus metadados</div>
+        <div class="step-desc">
+          Ao selecionar uma imagem, um painel aparece ao lado com todas as informações extraídas automaticamente:
+          modelo, sampler, steps, seed, LoRAs e tags de estilo.<br>
+          Para imagens sem metadados embutidos, o app usa IA de visão para gerar as tags automaticamente.
+        </div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-left"><div class="step-num">3</div><div class="step-line"></div></div>
+      <div class="step-content">
+        <div class="step-title">Monte seu prompt no Prompt Builder</div>
+        <div class="step-desc">
+          Clique em qualquer tag para adicioná-la ao <strong>Prompt Builder</strong> na parte inferior da tela.<br>
+          Reordene os chips arrastando, edite o texto manualmente, e use <strong>✦ Otimizar</strong> para que a IA reescreva o prompt no formato ideal para o seu gerador.
+          Quando estiver pronto, clique em <strong>Copiar</strong>.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Organização -->
+  <div class="grid2">
+    <div class="block">
+      <div class="block-title">Organizando o canvas</div>
+      <div class="tip">
+        <div class="tip-dot"></div>
+        <div class="tip-text"><strong>Grupos</strong> — selecione várias imagens e agrupe por tema. Arrastar o grupo move todas as imagens juntas.</div>
+      </div>
+      <div class="tip">
+        <div class="tip-dot"></div>
+        <div class="tip-text"><strong>Múltiplos canvas</strong> — crie canvas separados para projetos diferentes pela barra de abas no topo.</div>
+      </div>
+      <div class="tip">
+        <div class="tip-dot"></div>
+        <div class="tip-text"><strong>Renomear canvas</strong> — duplo clique na aba para renomear.</div>
+      </div>
+    </div>
+    <div class="block">
+      <div class="block-title">Prompt Builder</div>
+      <div class="tip">
+        <div class="tip-dot"></div>
+        <div class="tip-text"><strong>Histórico</strong> — os últimos 10 prompts ficam salvos. Clique no ícone de relógio para acessar.</div>
+      </div>
+      <div class="tip">
+        <div class="tip-dot"></div>
+        <div class="tip-text"><strong>Campo de texto livre</strong> — escreva partes do prompt manualmente junto com as tags.</div>
+      </div>
+      <div class="tip">
+        <div class="tip-dot"></div>
+        <div class="tip-text"><strong>Otimizar</strong> — escolha o modelo de destino (FLUX, Midjourney, SD...) e a IA adapta o prompt.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pf">
+    <span class="pf-brand">Ref Map</span>
+    <span class="pf-note">Acesse o tutorial a qualquer momento: Menu → Ajuda</span>
+  </div>
+</div>
+</div>
+
+<!-- ══ PÁGINA 2: ATALHOS ═════════════════════════════ -->
+<div class="page">
+<div class="inner">
+  <div class="ph"><span class="lbl">Referência rápida</span><span class="num">02 / 02</span></div>
+
+  <h2>Atalhos e dicas</h2>
+  <p class="lead">Tudo que você precisa para usar o Ref Map com agilidade no dia a dia.</p>
+
+  <div class="grid2" style="margin-bottom: 14px;">
+    <div class="block">
+      <div class="block-title">Canvas</div>
+      <div class="sk"><span class="sk-action">Navegar pelo canvas</span><span><span class="k">Scroll</span></span></div>
+      <div class="sk"><span class="sk-action">Zoom in / out</span><span><span class="k">Ctrl</span><span class="k">+</span><span class="k">−</span></span></div>
+      <div class="sk"><span class="sk-action">Centralizar tudo</span><span><span class="k">⊡</span> botão fit</span></div>
+      <div class="sk"><span class="sk-action">Selecionar múltiplos</span><span><span class="k">Ctrl</span> + clique</span></div>
+      <div class="sk"><span class="sk-action">Seleção por área</span><span><span class="k">Ctrl</span> + arrastar</span></div>
+      <div class="sk"><span class="sk-action">Trazer à frente</span><span><span class="k">]</span></span></div>
+      <div class="sk"><span class="sk-action">Mandar atrás</span><span><span class="k">[</span></span></div>
+      <div class="sk"><span class="sk-action">Apagar seleção</span><span><span class="k">Del</span></span></div>
+      <div class="sk"><span class="sk-action">Mostrar/ocultar minimap</span><span><span class="k">M</span></span></div>
+    </div>
+
+    <div class="block">
+      <div class="block-title">Prompt Builder</div>
+      <div class="sk"><span class="sk-action">Adicionar tag</span><span>Clique na tag</span></div>
+      <div class="sk"><span class="sk-action">Remover chip</span><span><span class="k">×</span> no chip</span></div>
+      <div class="sk"><span class="sk-action">Editar chip</span><span>Duplo clique</span></div>
+      <div class="sk"><span class="sk-action">Reordenar chips</span><span>Arrastar</span></div>
+      <div class="sk"><span class="sk-action">Otimizar prompt</span><span><span class="k">✦ Otimizar</span></span></div>
+      <div class="sk"><span class="sk-action">Copiar prompt</span><span><span class="k">Copiar</span></span></div>
+      <div class="sk"><span class="sk-action">Ver histórico</span><span><span class="k">🕐</span> ícone</span></div>
+      <div class="sk"><span class="sk-action">Limpar tudo</span><span><span class="k">Limpar</span></span></div>
+    </div>
+  </div>
+
+  <div class="block" style="margin-bottom: 14px;">
+    <div class="block-title">Menu principal (clique na logo)</div>
+    <div style="display:flex; flex-wrap:wrap; gap: 4px;">
+      <span class="tag">Arquivo → Salvar canvas</span>
+      <span class="tag">Arquivo → Abrir canvas</span>
+      <span class="tag">Ajuda → Tutorial</span>
+      <span class="tag">On Top — janela sempre visível</span>
+      <span class="tag">Configurações de API</span>
+    </div>
+  </div>
+
+  <div class="block">
+    <div class="block-title">Dicas pro</div>
+    <div class="tip">
+      <div class="tip-dot"></div>
+      <div class="tip-text"><strong>Combine referências de imagens diferentes</strong> — selecione tags de várias imagens no mesmo prompt builder para misturar estilos.</div>
+    </div>
+    <div class="tip">
+      <div class="tip-dot"></div>
+      <div class="tip-text"><strong>A ordem dos chips importa</strong> — arraste para reordenar. Tags no início do prompt têm mais peso na maioria dos geradores.</div>
+    </div>
+    <div class="tip">
+      <div class="tip-dot"></div>
+      <div class="tip-text"><strong>Use "On Top"</strong> no menu para manter o Ref Map visível enquanto gera imagens em outro app.</div>
+    </div>
+    <div class="tip">
+      <div class="tip-dot"></div>
+      <div class="tip-text"><strong>Clique em "Configure uma API key"</strong> na imagem com erro para ir direto às configurações e conectar sua chave.</div>
+    </div>
+  </div>
+
+  <div style="margin-top: 14px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, var(--red), var(--orange), var(--gold));"></div>
+
+  <div class="pf">
+    <span class="pf-brand">Ref Map</span>
+    <span class="pf-note">v0.0.1 · Menu → Ajuda para reabrir o tutorial no app</span>
+  </div>
+</div>
+</div>
+
+</body>
+</html>

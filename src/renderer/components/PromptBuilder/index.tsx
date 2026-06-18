@@ -1,4 +1,5 @@
 import { Fragment, useState, useRef, useEffect, forwardRef } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { createPortal } from 'react-dom'
 import {
   DndContext,
@@ -15,8 +16,109 @@ import {
   useSortable,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { usePromptStore, type PromptTag } from '../../store'
+import { usePromptStore, useCanvasStore, type PromptTag } from '../../store'
 
+function MicButton({ onTranscript }: { onTranscript: (text: string) => void }) {
+  const [state, setState] = useState<'idle' | 'recording' | 'transcribing' | 'error'>('idle')
+  const [errorMsg, setErrorMsg] = useState('')
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const chunksRef = useRef<Blob[]>([])
+  const streamRef = useRef<MediaStream | null>(null)
+
+  const showError = (msg: string) => {
+    setErrorMsg(msg)
+    setState('error')
+    setTimeout(() => setState('idle'), 3000)
+  }
+
+  const toggle = async () => {
+    if (state === 'transcribing' || state === 'error') return
+
+    if (state === 'recording') {
+      recorderRef.current?.stop()
+      return
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+      chunksRef.current = []
+
+      const recorder = new MediaRecorder(stream)
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
+      recorder.onstop = async () => {
+        streamRef.current?.getTracks().forEach(t => t.stop())
+        streamRef.current = null
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType })
+        const buffer = await blob.arrayBuffer()
+        setState('transcribing')
+        try {
+          const text = await window.api.transcribeAudio(new Uint8Array(buffer))
+          if (text?.trim()) onTranscript(text.trim())
+          setState('idle')
+        } catch (err) {
+          const msg = String(err)
+          if (msg.includes('NO_OPENAI_KEY')) showError('Chave API não configurada')
+          else showError('Erro ao transcrever')
+        }
+      }
+      recorder.start()
+      recorderRef.current = recorder
+      setState('recording')
+    } catch {
+      showError('Sem acesso ao microfone')
+    }
+  }
+
+  const label = state === 'recording' ? 'Parar gravação'
+    : state === 'transcribing' ? 'Transcrevendo...'
+    : state === 'error' ? errorMsg
+    : 'Ditar prompt'
+
+  const bgClass = state === 'recording' ? 'bg-red-500/20'
+    : state === 'transcribing' ? 'bg-orange-500/15'
+    : state === 'error' ? 'bg-red-500/10'
+    : 'hover:bg-white/[0.07]'
+
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        onClick={toggle}
+        title={label}
+        disabled={state === 'transcribing'}
+        className={`p-2.5 rounded-lg transition-all ${bgClass}`}
+      >
+        {state === 'recording' ? (
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+            <rect x="6" y="6" width="12" height="12" rx="2" fill="#ef4444" opacity="0.8"/>
+          </svg>
+        ) : state === 'transcribing' ? (
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" className="animate-spin">
+            <circle cx="12" cy="12" r="9" stroke="rgba(249,115,22,0.3)" strokeWidth="2"/>
+            <path d="M12 3a9 9 0 019 9" stroke="#f97316" strokeWidth="2" strokeLinecap="round"/>
+          </svg>
+        ) : state === 'error' ? (
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="9" stroke="#ef4444" strokeWidth="1.8" opacity="0.7"/>
+            <path d="M12 8v5M12 16v1" stroke="#ef4444" strokeWidth="1.8" strokeLinecap="round" opacity="0.7"/>
+          </svg>
+        ) : (
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+            <rect x="9" y="2" width="6" height="12" rx="3" stroke="rgba(255,255,255,0.4)" strokeWidth="1.8"/>
+            <path d="M5 11a7 7 0 0014 0" stroke="rgba(255,255,255,0.4)" strokeWidth="1.8" strokeLinecap="round"/>
+            <path d="M12 18v4M9 22h6" stroke="rgba(255,255,255,0.4)" strokeWidth="1.8" strokeLinecap="round"/>
+          </svg>
+        )}
+      </button>
+      {state === 'error' && (
+        <div className="absolute bottom-full mb-2 right-0 whitespace-nowrap px-2.5 py-1.5 rounded-lg text-[11px] text-red-400 bg-red-500/10 border border-red-500/20 pointer-events-none">
+          {errorMsg}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function InsertZone({ index, activeIndex, onActivate, onCommit, onCancel }: {
   index: number
@@ -49,7 +151,9 @@ function InsertZone({ index, activeIndex, onActivate, onCommit, onCancel }: {
 
   return (
     <div
-      className="self-stretch w-2 cursor-text"
+      data-insert-zone={index}
+      className="self-stretch cursor-text"
+      style={{ width: '12px', margin: '0 -4px', position: 'relative', zIndex: 5 }}
       onMouseDown={e => { e.preventDefault(); onActivate(index) }}
     />
   )
@@ -80,7 +184,9 @@ function SortableChip({ tag }: { tag: PromptTag }) {
   return (
     <div
       ref={setNodeRef}
+      data-chip
       style={style}
+      onContextMenu={e => { e.preventDefault(); e.stopPropagation(); window.dispatchEvent(new CustomEvent('save-to-my-presets', { detail: { value: tag.value } })) }}
       className={`rm-builder-chip group ${isDragging ? 'opacity-45 shadow-xl' : ''}`}
       {...attributes}
       {...listeners}
@@ -274,8 +380,8 @@ const DroppableTextarea = forwardRef<HTMLTextAreaElement, {
         onKeyDown={onKeyDown}
         placeholder={placeholder}
         rows={1}
-        className="bg-transparent text-[15px] text-white/70 placeholder-white/15 outline-none w-full resize-none overflow-hidden pb-2"
-        style={{ lineHeight: '1.5' }}
+        className="bg-transparent text-[15px] text-white/70 placeholder-white/15 outline-none w-full resize-none overflow-y-auto pb-2"
+        style={{ lineHeight: '1.5', maxHeight: '90px' }}
       />
       {isOver && cursorStyle && (
         <div
@@ -293,29 +399,79 @@ const DroppableTextarea = forwardRef<HTMLTextAreaElement, {
   )
 })
 
-const MODELS = [
-  { id: 'midjourney',       label: 'Midjourney' },
-  { id: 'nano-banana',      label: 'Nano Banana' },
-  { id: 'gpt-image-2',      label: 'GPT Image 2' },
-  { id: 'stable-diffusion', label: 'Stable Diffusion' },
-  { id: 'flux',             label: 'Flux' },
-  { id: 'flux2-klein',      label: 'Flux 2 [klein]' },
-  { id: 'zimage',           label: 'ZImage' },
-  { id: 'grok',             label: 'Grok (xAI)' },
-  { id: 'veo3',             label: 'Veo 3' },
-  { id: 'hunyuan',          label: 'HunYuan Video' },
-  { id: 'sora-2',           label: 'Sora 2' },
-  { id: 'wan',              label: 'Wan 2.2' },
-  { id: 'seedance',         label: 'Seedance 2.0' },
-  { id: 'ltx-2',            label: 'LTX-2' },
+const MODEL_GROUPS = [
+  {
+    group: 'Imagem',
+    models: [
+      { id: 'flux',               label: 'Flux',            nsfw: true },
+      { id: 'flux2-klein',        label: 'Flux 2 [klein]',  nsfw: true },
+      { id: 'gpt-image-2',        label: 'GPT Image 2' },
+      { id: 'grok',               label: 'Grok' },
+      { id: 'midjourney',         label: 'Midjourney' },
+      { id: 'nano-banana',        label: 'Nano Banana' },
+      { id: 'qwen-image-2512',    label: 'Qwen Image 2512', nsfw: true },
+      { id: 'stable-diffusion',   label: 'Stable Diffusion', nsfw: true },
+      { id: 'zimage',             label: 'ZImage',          nsfw: true },
+    ],
+  },
+  {
+    group: 'Vídeo',
+    models: [
+      { id: 'gemini-omni',  label: 'Gemini Omni' },
+      { id: 'hailuo',      label: 'Hailuo Minimax' },
+      { id: 'hunyuan',     label: 'HunYuan Video',     nsfw: true },
+      { id: 'kling-3',     label: 'Kling 3.0' },
+      { id: 'ltx-2',       label: 'LTX-2',             nsfw: true },
+      { id: 'luma',        label: 'Luma Dream Machine' },
+      { id: 'pika',        label: 'Pika' },
+      { id: 'pixverse',    label: 'PixVerse' },
+      { id: 'runway-gen4', label: 'Runway Gen-4' },
+      { id: 'seedance',    label: 'Seedance 2.0' },
+      { id: 'sora-2',      label: 'Sora 2' },
+      { id: 'veo3',        label: 'Veo 3' },
+      { id: 'wan',         label: 'Wan 2.2',            nsfw: true },
+    ],
+  },
 ]
+// Flat list for label lookup
+const MODELS = MODEL_GROUPS.flatMap(g => g.models)
 
 export default function PromptBuilder() {
   const { promptTags, reorderTags, clearAll, getPromptString, insertTagAt, removeTag } = usePromptStore()
   const dragPointerRef = useRef({ x: 0, y: 0 })
   const dragCleanupRef = useRef<(() => void) | null>(null)
   const [insertIndex, setInsertIndex] = useState<number | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied]           = useState(false)
+  const [history, setHistory]         = useState<string[]>([])
+  const [showHistory, setShowHistory] = useState(false)
+  const currentCanvasId = useCanvasStore(s => s.currentCanvasId)
+
+  useEffect(() => {
+    const checkKey = async () => {
+      const provider = ((await window.api.getSetting('aiProvider')) ?? 'anthropic') as string
+      const [activeKey, openaiKey] = await Promise.all([
+        window.api.getApiKey(provider),
+        window.api.getApiKey('openai'),
+      ])
+      const canTranscribe = !!(
+        (activeKey?.trim() && (activeKey.startsWith('tgp_') || provider === 'openai')) ||
+        openaiKey?.trim()
+      )
+      setHasOpenAIKey(canTranscribe)
+    }
+    checkKey()
+    window.addEventListener('apikey-changed', checkKey)
+    return () => window.removeEventListener('apikey-changed', checkKey)
+  }, [])
+
+  // Load history for current canvas
+  useEffect(() => {
+    if (!currentCanvasId) return
+    window.api.getSetting(`promptHistory_${currentCanvasId}`).then(raw => {
+      if (raw) try { setHistory(JSON.parse(raw)) } catch {}
+    })
+  }, [currentCanvasId])
+  const [hasOpenAIKey, setHasOpenAIKey] = useState(false)
   const [inputText, setInputText] = useState('')
   const [targetModel, setTargetModel] = useState<string | null>(null)
   const [showModels, setShowModels] = useState(false)
@@ -326,12 +482,14 @@ export default function PromptBuilder() {
   const modelBtnRef = useRef<HTMLButtonElement>(null)
   const modelDropdownRef = useRef<HTMLDivElement>(null)
   const textInputRef = useRef<HTMLTextAreaElement>(null)
+  const pendingModelRef = useRef<string | null>(null)
+  const handleSelectModelRef = useRef<((id: string) => Promise<void>) | null>(null)
 
   useEffect(() => {
     const el = textInputRef.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = el.scrollHeight + 'px'
+    el.style.height = Math.min(el.scrollHeight, 90) + 'px'
   }, [inputText])
 
   useEffect(() => {
@@ -344,6 +502,17 @@ export default function PromptBuilder() {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [showModels])
+
+  useEffect(() => {
+    const handler = () => {
+      const modelId = pendingModelRef.current
+      if (!modelId) return
+      pendingModelRef.current = null
+      handleSelectModelRef.current?.(modelId)
+    }
+    window.addEventListener('apikey-changed', handler)
+    return () => window.removeEventListener('apikey-changed', handler)
+  }, [])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
@@ -389,6 +558,12 @@ export default function PromptBuilder() {
     navigator.clipboard.writeText(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
+    // Save to history (max 10 entries, deduplicated)
+    if (currentCanvasId) {
+      const newHistory = [text, ...history.filter(h => h !== text)].slice(0, 10)
+      setHistory(newHistory)
+      window.api.setSetting(`promptHistory_${currentCanvasId}`, JSON.stringify(newHistory))
+    }
   }
 
   const handleClearAll = () => {
@@ -416,22 +591,37 @@ export default function PromptBuilder() {
       const text = optimized.split('\n').map((l: string) => l.trim()).filter((l: string) => l && l !== '---NEGATIVE---').join('\n')
       clearAll()
       setInputText(text)
+      setTargetModel(null)
+      // Save optimized prompt to history
+      if (currentCanvasId) {
+        const newHistory = [text, ...history.filter(h => h !== text)].slice(0, 10)
+        setHistory(newHistory)
+        window.api.setSetting(`promptHistory_${currentCanvasId}`, JSON.stringify(newHistory))
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error('[optimize]', msg)
-      setOptimizeError(msg.includes('API key') ? 'Configure a API key nas Settings' : `Erro: ${msg}`)
-      setTimeout(() => setOptimizeError(null), 6000)
+      if (msg === 'API key not configured') {
+        pendingModelRef.current = modelId
+        setTargetModel(null)
+        window.dispatchEvent(new CustomEvent('open-settings'))
+      } else {
+        setOptimizeError(`Erro: ${msg}`)
+        setTimeout(() => setOptimizeError(null), 6000)
+      }
     } finally {
       setOptimizing(false)
     }
   }
+
+  handleSelectModelRef.current = handleSelectModel
 
   const count = promptTags.length
   const hasContent = count > 0 || inputText.trim().length > 0
 
   return (
     <div
-      className="absolute bottom-10 left-1/2 -translate-x-1/2 z-20 pointer-events-none w-full max-w-[640px]"
+      className="absolute bottom-[20px] left-1/2 -translate-x-1/2 z-20 pointer-events-none w-full max-w-[640px]"
     >
       <div className="pointer-events-auto w-full rm-panel !border-transparent">
         <div style={{ padding: '24px 24px 0' }}>
@@ -444,7 +634,16 @@ export default function PromptBuilder() {
           >
             {/* Chips */}
             {count > 0 && (
-              <div className="flex flex-wrap items-start gap-1.5 pb-2 max-h-[90px] overflow-y-auto overflow-x-hidden">
+              <div
+                className="flex flex-wrap items-start gap-1.5 pb-2 max-h-[90px] overflow-y-auto overflow-x-hidden cursor-text"
+                onMouseDown={e => {
+                  // If clicked on empty space (not on a chip or insert zone), insert at end
+                  const target = e.target as Element
+                  if (target.closest('[data-chip]') || target.closest('[data-insert-zone]')) return
+                  e.preventDefault()
+                  setInsertIndex(promptTags.length)
+                }}
+              >
                 <SortableContext items={promptTags.map(t => t.id)} strategy={rectSortingStrategy}>
                   {promptTags.map((tag, i) => (
                     <Fragment key={tag.id}>
@@ -459,17 +658,27 @@ export default function PromptBuilder() {
                     </Fragment>
                   ))}
                 </SortableContext>
+                {/* Insert zone at end */}
+                <InsertZone
+                  index={promptTags.length}
+                  activeIndex={insertIndex}
+                  onActivate={setInsertIndex}
+                  onCommit={v => { insertTagAt(v, promptTags.length); setInsertIndex(null) }}
+                  onCancel={() => setInsertIndex(null)}
+                />
               </div>
             )}
 
-            {/* Textarea */}
-            <DroppableTextarea
-              ref={textInputRef}
-              value={inputText}
-              onChange={e => setInputText(e.target.value)}
-              onKeyDown={e => e.stopPropagation()}
-              placeholder="Escrever prompt..."
-            />
+            {/* Textarea — hidden when there are tags and no text */}
+            {(!count || inputText) && (
+              <DroppableTextarea
+                ref={textInputRef}
+                value={inputText}
+                onChange={e => setInputText(e.target.value)}
+                onKeyDown={e => e.stopPropagation()}
+                placeholder="Escrever prompt..."
+              />
+            )}
           </DndContext>
 
           {/* Ações */}
@@ -503,7 +712,7 @@ export default function PromptBuilder() {
               {showModels && createPortal(
                 <div
                   ref={modelDropdownRef}
-                  className="bg-black/95 backdrop-blur-md rounded-xl shadow-[0_25px_50px_-12px_rgba(0,0,0,0.8)] py-1.5 px-1 min-w-0 w-[120px] z-[9999]"
+                  className="bg-black/95 backdrop-blur-md rounded-xl shadow-[0_25px_50px_-12px_rgba(0,0,0,0.8)] py-1.5 px-1 min-w-0 w-[150px] z-[9999]"
                   style={{ position: 'fixed', left: dropdownPos.x, bottom: window.innerHeight - dropdownPos.y + 6 }}
                 >
                   {targetModel && (
@@ -517,18 +726,31 @@ export default function PromptBuilder() {
                       <div className="h-px bg-white/[0.06] mx-2 my-1" />
                     </>
                   )}
-                  {MODELS.map(m => (
-                    <button
-                      key={m.id}
-                      className={`w-full text-left px-2 py-1 text-[11px] rounded-md transition-colors cursor-default select-none ${
-                        targetModel === m.id
-                          ? 'text-orange-300/80 bg-orange-500/[0.12]'
-                          : 'text-white/75 hover:text-white hover:bg-white/[0.08]'
-                      }`}
-                      onClick={() => handleSelectModel(m.id)}
-                    >
-                      {m.label}
-                    </button>
+                  {MODEL_GROUPS.map((grp, gi) => (
+                    <div key={grp.group}>
+                      {gi > 0 && <div className="h-px bg-white/[0.06] mx-2 my-1" />}
+                      <div className="px-2 pt-1 pb-0.5 text-[9px] font-bold uppercase tracking-widest text-white/25">
+                        {grp.group}
+                      </div>
+                      {grp.models.map(m => (
+                        <button
+                          key={m.id}
+                          className={`w-full text-left px-2 py-1 text-[11px] rounded-md transition-colors cursor-default select-none flex items-center gap-1.5 ${
+                            targetModel === m.id
+                              ? 'text-orange-300/80 bg-orange-500/[0.12]'
+                              : 'text-white/75 hover:text-white hover:bg-white/[0.08]'
+                          }`}
+                          onClick={() => handleSelectModel(m.id)}
+                        >
+                          <span className="flex-1">{m.label}</span>
+                          {m.nsfw && (
+                            <span className="text-[8px] font-bold px-1 py-px rounded leading-none" style={{ color: 'rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)' }}>
+                              +18
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
                   ))}
                 </div>,
                 document.body
@@ -536,6 +758,7 @@ export default function PromptBuilder() {
             </div>
 
             <div className="flex items-center gap-2">
+            {hasOpenAIKey && <MicButton onTranscript={text => setInputText(prev => prev ? prev + ' ' + text : text)} />}
             {hasContent && (
               <button
                 onClick={handleClearAll}
@@ -573,8 +796,50 @@ export default function PromptBuilder() {
                 </svg>
               )}
             </button>
+            {/* History button */}
+            {history.length > 0 && (
+              <button
+                onClick={() => setShowHistory(s => !s)}
+                className={`p-2.5 rounded-lg transition-all shrink-0 hover:bg-white/[0.07] ${showHistory ? 'bg-white/[0.07]' : ''}`}
+                title="Histórico de prompts"
+              >
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="9" stroke="rgba(255,255,255,0.4)" strokeWidth="1.8"/>
+                  <path d="M12 7v5l3 3" stroke="rgba(255,255,255,0.4)" strokeWidth="1.8" strokeLinecap="round"/>
+                </svg>
+              </button>
+            )}
             </div>
           </div>
+
+          {/* History panel */}
+          <AnimatePresence initial={false}>
+            {showHistory && history.length > 0 && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.18, ease: 'easeOut' }}
+                style={{ overflow: 'hidden' }}
+              >
+                <div className="border-t border-white/[0.06] px-4 pt-3 pb-2 flex flex-col gap-1.5">
+                  <span className="text-[9px] uppercase tracking-widest text-white/25 font-semibold mb-1">Histórico</span>
+                  <div className="flex flex-col gap-1.5 max-h-[60px] overflow-y-auto">
+                    {history.map((h, i) => (
+                      <button
+                        key={i}
+                        onClick={() => { navigator.clipboard.writeText(h); setCopied(true); setTimeout(() => setCopied(false), 1500); setShowHistory(false) }}
+                        className="text-left text-[11px] text-white/45 hover:text-white/75 hover:bg-white/[0.04] rounded-lg px-2 py-1 transition-colors truncate shrink-0"
+                        title={h}
+                      >
+                        {h}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
         </div>
       </div>

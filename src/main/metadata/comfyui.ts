@@ -54,18 +54,20 @@ export function parseComfyUI(raw: Record<string, unknown>): ExtractionResult {
   let width: number | undefined
   let height: number | undefined
 
-  // Find positive prompt from CLIPTextEncode connected to KSampler positive
-  const ksampler = Object.values(workflow).find(n => n.class_type === 'KSampler')
+  // KSampler (standard SD) — also covers KSamplerAdvanced
+  const ksampler = Object.values(workflow).find(
+    n => n.class_type === 'KSampler' || n.class_type === 'KSamplerAdvanced'
+  )
   if (ksampler) {
-    seed = ksampler.inputs.seed as number
+    seed  = (ksampler.inputs.seed ?? ksampler.inputs.noise_seed) as number
     steps = ksampler.inputs.steps as number
     sampler = ksampler.inputs.sampler_name as string
-    cfg = ksampler.inputs.cfg as number
+    cfg   = ksampler.inputs.cfg as number
+    if (ksampler.inputs.denoise !== undefined) denoise = ksampler.inputs.denoise as number
 
     const posRef = ksampler.inputs.positive
     if (Array.isArray(posRef)) {
-      const posNodeId = posRef[0] as string
-      const posNode = workflow[posNodeId]
+      const posNode = workflow[posRef[0] as string]
       if (posNode?.class_type === 'CLIPTextEncode') {
         positivePrompt = (posNode.inputs.text as string) ?? ''
       }
@@ -75,21 +77,19 @@ export function parseComfyUI(raw: Record<string, unknown>): ExtractionResult {
   // Fallback: first CLIPTextEncode with longest text
   if (!positivePrompt) {
     const clips = Object.values(workflow).filter(n => n.class_type === 'CLIPTextEncode')
-    clips.sort((a, b) =>
-      ((b.inputs.text as string) ?? '').length - ((a.inputs.text as string) ?? '').length
-    )
+    clips.sort((a, b) => ((b.inputs.text as string) ?? '').length - ((a.inputs.text as string) ?? '').length)
     positivePrompt = (clips[0]?.inputs.text as string) ?? ''
   }
 
-  // Walk all nodes once to gather remaining params
-  const MODEL_FIELDS = ['ckpt_name', 'unet_name', 'model_name', 'checkpoint']
-  const MODEL_EXTS = /\.(safetensors|ckpt|pt|bin|pth)$/i
+  // Walk all nodes once
+  const MODEL_FIELDS = ['ckpt_name', 'unet_name', 'model_name', 'checkpoint', 'base_ckpt_name']
+  const MODEL_EXTS = /\.(safetensors|ckpt|pt|bin|pth|gguf|sft)$/i
   const stripPath = (s: string) => s.replace(/.*[/\\]/, '').replace(/\.[^.]+$/, '')
 
   for (const node of Object.values(workflow)) {
     const ct = node.class_type
 
-    // Base model (first match wins)
+    // Base model
     if (!model) {
       for (const field of MODEL_FIELDS) {
         const val = node.inputs?.[field]
@@ -97,47 +97,54 @@ export function parseComfyUI(raw: Record<string, unknown>): ExtractionResult {
       }
     }
 
-    // LoRA loaders
-    if (ct === 'LoraLoader' || ct === 'LoraLoaderModelOnly') {
+    // LoRA loaders (standard + Power Lora Loader + StyleModelLoader used as LoRA)
+    if (ct === 'LoraLoader' || ct === 'LoraLoaderModelOnly' || ct === 'LoraLoaderBlockWeight') {
       const name = node.inputs?.lora_name as string
-      if (name) {
-        loras.push({
-          name: stripPath(name),
-          strengthModel: (node.inputs?.strength_model as number) ?? 1,
-        })
+      if (name) loras.push({ name: stripPath(name), strengthModel: (node.inputs?.strength_model as number) ?? 1 })
+    }
+    // Power Lora Loader (multiple loras in one node)
+    if (ct === 'Power Lora Loader (rgthree)') {
+      for (let i = 1; i <= 10; i++) {
+        const name = node.inputs?.[`lora_${i}`] as string
+        if (name && MODEL_EXTS.test(name)) loras.push({ name: stripPath(name), strengthModel: (node.inputs?.[`strength_${i}`] as number) ?? 1 })
       }
     }
 
-    // Scheduler (Flux BasicScheduler or standard)
-    if (ct === 'BasicScheduler' || ct === 'KarrasScheduler') {
+    // Schedulers
+    if (ct === 'BasicScheduler' || ct === 'KarrasScheduler' || ct === 'ExponentialScheduler' ||
+        ct === 'PolyexponentialScheduler' || ct === 'VPScheduler') {
       scheduler = node.inputs?.scheduler as string
       if (node.inputs?.denoise !== undefined) denoise = node.inputs.denoise as number
       if (node.inputs?.steps !== undefined && steps === undefined) steps = node.inputs.steps as number
     }
 
-    // Flux guidance
-    if (ct === 'FluxGuidance') {
-      guidance = node.inputs?.guidance as number
+    // Guidance (Flux / SD3)
+    if (ct === 'FluxGuidance' || ct === 'CFGGuider') {
+      guidance = (node.inputs?.guidance ?? node.inputs?.cfg) as number
     }
 
-    // Seed from advanced sampler nodes
-    if ((ct === 'RandomNoise' || ct === 'KSamplerSelect') && seed === undefined) {
-      if (node.inputs?.noise_seed !== undefined) seed = node.inputs.noise_seed as number
+    // Seed — various nodes
+    if ((ct === 'RandomNoise' || ct === 'KSamplerSelect' || ct === 'SamplerCustomAdvanced') && seed === undefined) {
+      seed = (node.inputs?.noise_seed ?? node.inputs?.seed) as number
     }
 
-    // Resolution
-    if ((ct === 'EmptySD3LatentImage' || ct === 'EmptyLatentImage' || ct === 'EmptyHunyuanLatentVideo') && !width) {
-      width = node.inputs?.width as number
-      height = node.inputs?.height as number
-    }
-
-    // Sampler from advanced nodes
-    if (ct === 'KSamplerSelect' && !sampler) {
+    // Sampler node
+    if ((ct === 'KSamplerSelect' || ct === 'SamplerCustomAdvanced') && !sampler) {
       sampler = node.inputs?.sampler_name as string
+    }
+
+    // Resolution — many latent node types
+    if (!width && (
+      ct === 'EmptyLatentImage' || ct === 'EmptySD3LatentImage' ||
+      ct === 'EmptyHunyuanLatentVideo' || ct === 'EmptyMochiLatentVideo' ||
+      ct === 'EmptyCogVideoLatentVideo' || ct === 'CLIPTextEncodeFlux' ||
+      ct === 'EmptyLatentAudio' || ct === 'LatentFromBatch'
+    )) {
+      if (node.inputs?.width) { width = node.inputs.width as number; height = node.inputs.height as number }
     }
   }
 
-  // Fallback: any string input that looks like a model file
+  // Wide fallback: any string value ending in a model extension
   if (!model) {
     outer: for (const node of Object.values(workflow)) {
       for (const val of Object.values(node.inputs ?? {})) {

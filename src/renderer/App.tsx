@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { type Session } from '@supabase/supabase-js'
 import logoUrl from './assets/logo.png'
-import { ReactFlowProvider } from '@xyflow/react'
 import TopBar from './components/TopBar'
-import Canvas from './components/Canvas'
+import PixiCanvas from './components/PixiCanvas'
 import PromptBuilder from './components/PromptBuilder'
 import Settings from './components/Settings'
 import Onboarding from './components/Onboarding'
 import About from './components/About'
 import Auth from './components/Auth'
+import UpdateBanner from './components/UpdateBanner'
 import { useCanvasStore, usePromptStore } from './store'
 import { supabase } from './lib/supabase'
 
@@ -19,6 +19,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [ready, setReady] = useState(false)
   const [hasApiKey, setHasApiKey] = useState(false)
+  const [apiProviderName, setApiProviderName] = useState('')
 
   const setCanvasList      = useCanvasStore(s => s.setCanvasList)
   const setCurrentCanvasId = useCanvasStore(s => s.setCurrentCanvasId)
@@ -33,6 +34,13 @@ export default function App() {
     return () => subscription.unsubscribe()
   }, [])
 
+  // Open settings from anywhere via custom event
+  useEffect(() => {
+    const handler = () => setShowSettings(true)
+    window.addEventListener('open-settings', handler)
+    return () => window.removeEventListener('open-settings', handler)
+  }, [])
+
   // Auto-save prompt tags whenever they change
   useEffect(() => {
     return usePromptStore.subscribe((state, prev) => {
@@ -43,8 +51,16 @@ export default function App() {
     })
   }, [])
 
-  const handleKeySaved = () => {
+  const resolveProviderName = async () => {
+    const provider = (await window.api.getSetting('aiProvider') as string | null) ?? 'anthropic'
+    const names: Record<string, string> = { anthropic: 'Claude', openai: 'ChatGPT', togetherai: 'Together AI' }
+    return names[provider] ?? provider
+  }
+
+  const handleKeySaved = async () => {
     setHasApiKey(true)
+    setApiProviderName(await resolveProviderName())
+    window.dispatchEvent(new CustomEvent('apikey-changed'))
     const store = useCanvasStore.getState()
     store.nodes.forEach(node => {
       if (node.data.metadataSource === 'none' || node.data.isError) {
@@ -57,6 +73,8 @@ export default function App() {
     const provider = (await window.api.getSetting('aiProvider') as string | null) ?? 'anthropic'
     await window.api.setApiKey(provider as 'anthropic' | 'openai', '')
     setHasApiKey(false)
+    setApiProviderName('')
+    window.dispatchEvent(new CustomEvent('apikey-changed'))
   }
 
   const handleSignOut = async () => {
@@ -75,6 +93,10 @@ export default function App() {
       const provider = (await window.api.getSetting('aiProvider') as string | null) ?? 'anthropic'
       const key = await window.api.getApiKey(provider as 'anthropic' | 'openai')
       setHasApiKey(!!key)
+      if (key) {
+        const names: Record<string, string> = { anthropic: 'Claude', openai: 'ChatGPT', togetherai: 'Together AI' }
+        setApiProviderName(names[provider] ?? provider)
+      }
 
       // Load canvas list
       const canvases = await window.api.listCanvases() as { id: string; name: string; updated_at: number }[]
@@ -93,6 +115,7 @@ export default function App() {
             metadata_source: string; model_name?: string
             parent_id?: string; node_type?: string
             comfy_params?: string; linked_node_id?: string
+            thumbnail_path?: string; starred?: number
           }[]
           tags: { id: string; node_id: string; category: string; value: string; source: string }[]
         }
@@ -116,6 +139,7 @@ export default function App() {
             canvasId: targetId,
             isGroup: true,
             label: 'Grupo',
+            modelName: n.model_name ?? undefined, // stores saved group color (#rrggbb)
           },
         }))
 
@@ -127,6 +151,8 @@ export default function App() {
           style: { width: n.width },
           data: {
             imagePath: n.image_path,
+            thumbnailPath: n.thumbnail_path ?? undefined,
+            starred: n.starred === 1,
             tags: tags
               .filter(t => t.node_id === n.id)
               .map(t => ({
@@ -164,9 +190,33 @@ export default function App() {
           }
         })
 
+        // Mark images without description as pending so they get processed on startup
+        const imageFlowNodesReady = imageFlowNodes.map(n => ({
+          ...n,
+          data: {
+            ...n.data,
+            isPending: !!key && (n.data.metadataSource === 'none' || n.data.isError),
+            isError: false,
+          }
+        }))
+
         // Group nodes must come before their children in the array
-        setNodes([...groupFlowNodes, ...metadataFlowNodes, ...imageFlowNodes])
+        setNodes([...groupFlowNodes, ...metadataFlowNodes, ...imageFlowNodesReady])
         await window.api.setSetting('lastCanvasId', targetId)
+
+        // Batch generate thumbnails for nodes that don't have one yet (background)
+        const nodesWithoutThumb = imageDbNodes.filter(n => !n.thumbnail_path && n.image_path)
+        if (nodesWithoutThumb.length > 0) {
+          ;(async () => {
+            for (const n of nodesWithoutThumb) {
+              try {
+                const thumbPath = await window.api.createThumbnail(n.image_path)
+                await window.api.updateNodeThumbnail(n.id, thumbPath)
+                useCanvasStore.getState().updateNodeData(n.id, { thumbnailPath: thumbPath })
+              } catch {}
+            }
+          })()
+        }
 
         // Restore prompt builder state for this canvas
         const savedPrompt = await window.api.getSetting(`promptBuilder_${targetId}`)
@@ -221,19 +271,20 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'radial-gradient(ellipse at 50% 40%, #1a0a0e 0%, #0d0407 50%, #080305 100%)' }}>
+    <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'radial-gradient(ellipse at 50% 40%, #1a0a0e 0%, #0d0407 50%, #080305 100%)' }} onContextMenu={e => e.preventDefault()}>
       <TopBar
         onOpenSettings={() => setShowSettings(true)}
         onOpenAbout={() => setShowAbout(true)}
+        onOpenTutorial={() => setShowOnboarding(true)}
         hasApiKey={hasApiKey}
+        apiProviderName={apiProviderName}
         onRemoveApiKey={handleRemoveApiKey}
         onSignOut={handleSignOut}
       />
 
+      <UpdateBanner />
       <div className="flex-1 overflow-hidden relative flex flex-col px-3 pb-3">
-        <ReactFlowProvider>
-          <Canvas canvasId={currentCanvasId ?? ''} />
-        </ReactFlowProvider>
+        <PixiCanvas canvasId={currentCanvasId ?? ''} />
         <PromptBuilder />
       </div>
 

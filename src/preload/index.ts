@@ -24,6 +24,8 @@ const api = {
   // Metadata
   extractMetadata: (imagePath: string) => ipcRenderer.invoke('image:extractMetadata', imagePath),
   analyzeWithAI: (imagePath: string) => ipcRenderer.invoke('image:analyzeWithAI', imagePath),
+  createThumbnail: (imagePath: string): Promise<string> => ipcRenderer.invoke('image:createThumbnail', imagePath),
+  readClipboardImage: (): Promise<string | null> => ipcRenderer.invoke('clipboard:readImage'),
 
   // Settings
   getApiKey: (provider: string): Promise<string | null> => ipcRenderer.invoke('settings:getApiKey', provider),
@@ -33,7 +35,9 @@ const api = {
   getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
 
   // Canvas files
-  exportCanvasFile: (data: { name: string; nodes: unknown[]; tags: unknown[] }) => ipcRenderer.invoke('canvas:exportFile', data),
+  autoBackup: (data: { name: string; nodes: unknown[]; tags: unknown[] }): Promise<string | null> => ipcRenderer.invoke('canvas:autoBackup', data),
+  saveToPath: (filePath: string, data: { name: string; nodes: unknown[]; tags: unknown[] }): Promise<boolean> => ipcRenderer.invoke('canvas:saveToPath', filePath, data),
+  exportCanvasFile: (data: { name: string; nodes: unknown[]; tags: unknown[] }): Promise<string | null> => ipcRenderer.invoke('canvas:exportFile', data),
   openCanvasFile: (): Promise<{ version: number; name: string; nodes: unknown[]; tags: unknown[] } | null> => ipcRenderer.invoke('canvas:openFile'),
 
   // Canvas
@@ -46,9 +50,42 @@ const api = {
   // Prompt optimization
   optimizePrompt: (prompt: string, modelId: string): Promise<string> => ipcRenderer.invoke('prompt:optimize', prompt, modelId),
 
+  // Tag translation
+  translateTags: (values: string[], targetLang: 'pt' | 'en'): Promise<string[]> => ipcRenderer.invoke('tags:translate', values, targetLang),
+
+  // Speech transcription
+  transcribeAudio: (audioData: Uint8Array): Promise<string> => ipcRenderer.invoke('speech:transcribe', audioData),
+
+  // Auto-updater
+  checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
+  installUpdate: () => ipcRenderer.invoke('updater:install'),
+  onUpdateAvailable: (cb: (info: { version: string }) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, info: { version: string }) => cb(info)
+    ipcRenderer.on('updater:updateAvailable', handler)
+    return () => ipcRenderer.off('updater:updateAvailable', handler)
+  },
+  onDownloadProgress: (cb: (percent: number) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, percent: number) => cb(percent)
+    ipcRenderer.on('updater:downloadProgress', handler)
+    return () => ipcRenderer.off('updater:downloadProgress', handler)
+  },
+  onUpdateDownloaded: (cb: (version: string) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, version: string) => cb(version)
+    ipcRenderer.on('updater:updateDownloaded', handler)
+    return () => ipcRenderer.off('updater:updateDownloaded', handler)
+  },
+  onUpdateError: (cb: (msg: string) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, msg: string) => cb(msg)
+    ipcRenderer.on('updater:error', handler)
+    return () => ipcRenderer.off('updater:error', handler)
+  },
+
   // Nodes
   createNode: (node: unknown) => ipcRenderer.invoke('node:create', node),
   updateNodeMetadata: (id: string, source: string, modelName?: string) => ipcRenderer.invoke('node:updateMetadata', id, source, modelName),
+  updateNodeThumbnail: (id: string, thumbPath: string) => ipcRenderer.invoke('node:updateThumbnail', id, thumbPath),
+  setNodeStarred: (id: string, starred: boolean) => ipcRenderer.invoke('node:setStarred', id, starred),
   updateNodePosition: (id: string, x: number, y: number) => ipcRenderer.invoke('node:updatePosition', id, x, y),
   updateNodeSize: (id: string, width: number, height: number) => ipcRenderer.invoke('node:updateSize', id, width, height),
   deleteNode: (id: string) => ipcRenderer.invoke('node:delete', id),

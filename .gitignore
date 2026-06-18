@@ -5,3 +5,13 @@ dist-release/
 out/
 *.local
 .env
+
+# Arquivos grandes de design
+ID/*.mov
+ID/*.aep
+ID/*.mp4
+ID/Salvamento automático*/
+*.pdf
+
+# Arquivos temporários
+electron.vite.config.*.mjs

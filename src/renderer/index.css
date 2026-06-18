@@ -41,6 +41,7 @@
   --font-xs:   11px;
   --font-sm:   12px;
   --font-base: 13px;
+
 }
 
 /* ─── Component Classes ────────────────────────────────────────────────────── */
@@ -53,7 +54,7 @@
     border: 1px solid var(--border-panel);
     border-radius: var(--radius-2xl);
     box-shadow:
-      0 25px 50px -12px rgba(0, 0, 0, 0.8),
+      0 8px 20px -6px rgba(0, 0, 0, 0.6),
       inset 0 1px 0 rgba(255, 255, 255, 0.07);
     overflow: hidden;
   }
@@ -76,12 +77,14 @@
   .rm-chip {
     display: inline-flex;
     align-items: center;
+    justify-content: flex-start;
+    text-align: left;
     border-radius: var(--radius-md);
     border: 1px solid rgba(255, 255, 255, 0.08);
     background: rgba(255, 255, 255, 0.06);
     color: var(--text-2);
-    font-size: var(--font-xs);
-    padding: 4px 8px;
+    font-size: 13px;
+    padding: 5px 10px;
     cursor: pointer;
     transition: background 120ms, color 120ms, border-color 120ms;
   }
@@ -199,3 +202,4 @@ input, textarea, [contenteditable] {
   border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+

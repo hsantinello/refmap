@@ -6,12 +6,14 @@ import logoUrl from '../../assets/logo.png'
 interface TopBarProps {
   onOpenSettings: () => void
   onOpenAbout: () => void
+  onOpenTutorial: () => void
   hasApiKey: boolean
+  apiProviderName?: string
   onRemoveApiKey: () => void
   onSignOut: () => void
 }
 
-export default function TopBar({ onOpenSettings, onOpenAbout, hasApiKey, onRemoveApiKey, onSignOut }: TopBarProps) {
+export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, hasApiKey, apiProviderName, onRemoveApiKey, onSignOut }: TopBarProps) {
   const [alwaysOnTop, setAlwaysOnTop] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -33,6 +35,8 @@ export default function TopBar({ onOpenSettings, onOpenAbout, hasApiKey, onRemov
   }, [showLogoMenu])
   const canvasList      = useCanvasStore(s => s.canvasList)
   const currentCanvasId = useCanvasStore(s => s.currentCanvasId)
+  const sfwMode         = useCanvasStore(s => s.sfwMode)
+  const setSfwMode      = useCanvasStore(s => s.setSfwMode)
 
   const handleConnectionClick = () => {
     if (!hasApiKey) { onOpenSettings(); return }
@@ -91,9 +95,8 @@ export default function TopBar({ onOpenSettings, onOpenAbout, hasApiKey, onRemov
 
     const canvasId = await window.api.createCanvas(saved.name) as string
     const store = useCanvasStore.getState()
-    store.setCanvasList([...store.canvasList, { id: canvasId, name: saved.name, updated_at: Date.now() }])
-    store.setCurrentCanvasId(canvasId)
-    await window.api.setSetting('lastCanvasId', canvasId)
+    // NOTE: setCurrentCanvasId is called AFTER setNodes below so PixiCanvas
+    // finds the correct nodes when its canvas-switch effect fires.
 
     // Map old IDs → new IDs to avoid DB conflicts
     const idMap = new Map<string, string>()
@@ -198,7 +201,11 @@ export default function TopBar({ onOpenSettings, onOpenAbout, hasApiKey, onRemov
       }
     }
 
+    // Set nodes FIRST, then change canvas ID — same pattern as handleSwitchCanvas
+    store.setCanvasList([...store.canvasList, { id: canvasId, name: saved.name, updated_at: Date.now() }])
     store.setNodes(flowNodes)
+    store.setCurrentCanvasId(canvasId)
+    await window.api.setSetting('lastCanvasId', canvasId)
     usePromptStore.getState().clearAll()
   }
 
@@ -267,11 +274,8 @@ export default function TopBar({ onOpenSettings, onOpenAbout, hasApiKey, onRemov
       tags: { id: string; node_id: string; category: string; value: string; source: string }[]
     }
 
-    const store = useCanvasStore.getState()
-    store.setCurrentCanvasId(id)
-    await window.api.setSetting('lastCanvasId', id)
-
-    // Order: groups → image nodes → metadata nodes
+    // Build flow nodes BEFORE changing the canvas ID so the store is ready
+    // when PixiCanvas's canvas-switch effect fires.
     const nodeTypeOrder = (t: string | undefined) => t === 'group' ? 0 : t === 'metadata' ? 2 : 1
     const sorted = [...nodes].sort((a, b) => nodeTypeOrder(a.node_type) - nodeTypeOrder(b.node_type))
 
@@ -293,6 +297,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, hasApiKey, onRemov
             canvasId: id,
             isGroup: true,
             label: 'Grupo',
+            modelName: n.model_name ?? undefined, // stores saved group color
           },
         })
       } else if (n.node_type === 'metadata') {
@@ -337,7 +342,11 @@ export default function TopBar({ onOpenSettings, onOpenAbout, hasApiKey, onRemov
       }
     }
 
+    // Set nodes THEN change ID — PixiCanvas reads store.nodes when it detects the ID change
+    const store = useCanvasStore.getState()
     store.setNodes(flowNodes)
+    store.setCurrentCanvasId(id)
+    await window.api.setSetting('lastCanvasId', id)
 
     const savedPrompt = await window.api.getSetting(`promptBuilder_${id}`)
     if (savedPrompt) {
@@ -389,7 +398,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, hasApiKey, onRemov
                 </svg>
               </button>
               {showArquivoSub && (
-                <div className="absolute left-full top-0 w-[160px] bg-black rounded-xl shadow-[0_25px_50px_-12px_rgba(0,0,0,0.8)] z-50">
+                <div className="absolute left-full top-0 w-[200px] bg-black rounded-xl shadow-[0_25px_50px_-12px_rgba(0,0,0,0.8)] z-50 whitespace-nowrap">
                   <button
                     onClick={() => { handleSave(); setShowLogoMenu(false); setShowArquivoSub(false) }}
                     style={{ padding: '10px 20px' }}
@@ -401,6 +410,19 @@ export default function TopBar({ onOpenSettings, onOpenAbout, hasApiKey, onRemov
                       <path d="M4 2h6v3H4z" stroke="currentColor" strokeWidth="1.3"/>
                     </svg>
                     Salvar Canvas
+                  </button>
+                  <button
+                    onClick={() => { handleSave(); setShowLogoMenu(false); setShowArquivoSub(false) }}
+                    style={{ padding: '10px 20px' }}
+                    className="w-full flex items-center gap-3 text-[12px] text-white/60 hover:text-white/90 hover:bg-white/[0.05] transition-colors text-left"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 14 14" fill="none" className="shrink-0">
+                      <path d="M2 2h8l2 2v8a1 1 0 01-1 1H3a1 1 0 01-1-1V2z" stroke="currentColor" strokeWidth="1.3"/>
+                      <path d="M5 13V8h4v5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M4 2h6v3H4z" stroke="currentColor" strokeWidth="1.3"/>
+                      <path d="M9 2v3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                    </svg>
+                    Salvar Canvas Como
                   </button>
                   <button
                     onClick={() => { handleOpen(); setShowLogoMenu(false); setShowArquivoSub(false) }}
@@ -417,18 +439,6 @@ export default function TopBar({ onOpenSettings, onOpenAbout, hasApiKey, onRemov
             </div>
             <div className="h-px bg-white/[0.05] mx-3" />
             <button
-              onClick={() => { onOpenAbout(); setShowLogoMenu(false) }}
-              style={{ padding: '10px 20px' }}
-              className="w-full flex items-center gap-3 text-[12px] text-white/60 hover:text-white/90 hover:bg-white/[0.05] transition-colors text-left"
-            >
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" className="shrink-0">
-                <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.3"/>
-                <path d="M7 6.5v4M7 4.5v.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-              </svg>
-              Ajuda
-            </button>
-            <div className="h-px bg-white/[0.05] mx-3" />
-            <button
               onClick={() => { handleAlwaysOnTop() }}
               style={{ padding: '10px 20px' }}
               className="w-full flex items-center justify-between gap-3 text-[12px] text-white/60 hover:text-white/90 hover:bg-white/[0.05] transition-colors text-left"
@@ -442,6 +452,46 @@ export default function TopBar({ onOpenSettings, onOpenAbout, hasApiKey, onRemov
               <div className={`relative w-8 h-[18px] rounded-full transition-colors duration-200 shrink-0 ${alwaysOnTop ? 'bg-orange-500' : 'bg-white/[0.12]'}`}>
                 <div className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow-sm transition-all duration-200 ${alwaysOnTop ? 'left-[18px]' : 'left-[2px]'}`} />
               </div>
+            </button>
+            <button
+              onClick={() => setSfwMode(!sfwMode)}
+              style={{ padding: '10px 20px' }}
+              className="w-full flex items-center justify-between gap-3 text-[12px] text-white/60 hover:text-white/90 hover:bg-white/[0.05] transition-colors text-left"
+            >
+              <div className="flex items-center gap-3">
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none" className="shrink-0">
+                  <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.3"/>
+                  <path d="M4 7c0-1.657 1.343-3 3-3s3 1.343 3 3-1.343 3-3 3-3-1.343-3-3z" fill="currentColor" opacity="0.4"/>
+                  <line x1="2" y1="2" x2="12" y2="12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" className={sfwMode ? '' : 'hidden'}/>
+                </svg>
+                Modo SFW
+              </div>
+              <div className={`relative w-8 h-[18px] rounded-full transition-colors duration-200 shrink-0 ${sfwMode ? 'bg-orange-500' : 'bg-white/[0.12]'}`}>
+                <div className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow-sm transition-all duration-200 ${sfwMode ? 'left-[18px]' : 'left-[2px]'}`} />
+              </div>
+            </button>
+            <div className="h-px bg-white/[0.05] mx-3" />
+            <button
+              onClick={() => { onOpenTutorial(); setShowLogoMenu(false) }}
+              style={{ padding: '10px 20px' }}
+              className="w-full flex items-center gap-3 text-[12px] text-white/60 hover:text-white/90 hover:bg-white/[0.05] transition-colors text-left"
+            >
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" className="shrink-0">
+                <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.3"/>
+                <path d="M7 6.5v4M7 4.5v.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+              </svg>
+              Ajuda
+            </button>
+            <button
+              onClick={() => { window.api.openExternal('mailto:app@refmap.santinello.com.br?subject=Suporte%20REFMAP'); setShowLogoMenu(false) }}
+              style={{ padding: '10px 20px' }}
+              className="w-full flex items-center gap-3 text-[12px] text-white/60 hover:text-white/90 hover:bg-white/[0.05] transition-colors text-left"
+            >
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" className="shrink-0">
+                <rect x="1" y="3" width="12" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
+                <path d="M1 4l6 4 6-4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              Suporte
             </button>
             <div className="h-px bg-white/[0.05] mx-3" />
             <button
@@ -525,7 +575,9 @@ export default function TopBar({ onOpenSettings, onOpenAbout, hasApiKey, onRemov
           className="no-drag-region flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/[0.04] border border-white/[0.06] hover:bg-white/[0.09] hover:border-white/[0.1] transition-all"
         >
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${hasApiKey ? 'bg-green-400' : 'bg-orange-400'}`} />
-          <span className="text-[11px] text-white/50">{hasApiKey ? 'API Conectada' : 'Conecte sua API'}</span>
+          <span className="text-[11px] text-white/50">
+            {hasApiKey ? (apiProviderName ? `API conectada — ${apiProviderName}` : 'API Conectada') : 'Conecte sua API'}
+          </span>
         </button>
 
       </div>

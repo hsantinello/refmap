@@ -30,6 +30,8 @@ export interface ComfyParams {
 
 export interface ImageNodeData extends Record<string, unknown> {
   imagePath: string
+  thumbnailPath?: string
+  starred?: boolean
   tags: Tag[]
   metadataSource: 'comfyui' | 'a1111' | 'midjourney' | 'ai' | 'none' | 'group'
   modelName?: string
@@ -58,11 +60,13 @@ interface CanvasStore {
   edges: Edge[]
   currentCanvasId: string | null
   canvasList: { id: string; name: string; updated_at: number }[]
+  sfwMode: boolean
 
   setNodes: (nodes: Node<ImageNodeData>[]) => void
   setEdges: (edges: Edge[]) => void
   setCurrentCanvasId: (id: string) => void
   setCanvasList: (list: { id: string; name: string; updated_at: number }[]) => void
+  setSfwMode: (v: boolean) => void
 
   addImageNode: (imagePath: string, position: XYPosition, canvasId: string, width?: number) => string
   addGroupNode: (id: string, position: XYPosition, size: { width: number; height: number }, canvasId: string) => void
@@ -90,11 +94,13 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   edges: [],
   currentCanvasId: null,
   canvasList: [],
+  sfwMode: false,
 
   setNodes: (nodes) => set({ nodes }),
   setEdges: (edges) => set({ edges }),
   setCurrentCanvasId: (id) => set({ currentCanvasId: id }),
   setCanvasList: (list) => set({ canvasList: list }),
+  setSfwMode: (v) => set({ sfwMode: v }),
 
   addImageNode: (imagePath, position, canvasId, width = 240) => {
     const id = uuid()

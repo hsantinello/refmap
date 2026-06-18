@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3'
 import path from 'path'
+import fs from 'fs'
 import { app } from 'electron'
 
 let db: Database.Database
@@ -87,6 +88,19 @@ export function initDb(): void {
     db.exec('ALTER TABLE nodes ADD COLUMN linked_node_id TEXT')
   }
 
+  const hasThumbnailPath = (db.prepare("SELECT COUNT(*) as count FROM pragma_table_info('nodes') WHERE name='thumbnail_path'").get() as { count: number }).count
+  if (!hasThumbnailPath) {
+    db.exec('ALTER TABLE nodes ADD COLUMN thumbnail_path TEXT')
+  }
+
+  const hasStarred = (db.prepare("SELECT COUNT(*) as count FROM pragma_table_info('nodes') WHERE name='starred'").get() as { count: number }).count
+  if (!hasStarred) {
+    db.exec('ALTER TABLE nodes ADD COLUMN starred INTEGER NOT NULL DEFAULT 0')
+  }
+
+  // Ensure thumbnails directory exists
+  fs.mkdirSync(path.join(app.getPath('userData'), 'thumbnails'), { recursive: true })
+
   const existing = db.prepare('SELECT id FROM canvases LIMIT 1').get()
   if (!existing) {
     const { randomUUID } = require('crypto')
@@ -148,6 +162,10 @@ export const nodeQueries = {
     getDb().prepare('UPDATE nodes SET parent_id = ? WHERE id = ?').run(parentId, id),
   getChildren: (parentId: string) =>
     getDb().prepare('SELECT id FROM nodes WHERE parent_id = ?').all(parentId) as { id: string }[],
+  updateThumbnail: (id: string, thumbPath: string) =>
+    getDb().prepare('UPDATE nodes SET thumbnail_path = ? WHERE id = ?').run(thumbPath, id),
+  setStarred: (id: string, starred: boolean) =>
+    getDb().prepare('UPDATE nodes SET starred = ? WHERE id = ?').run(starred ? 1 : 0, id),
   delete: (id: string) =>
     getDb().prepare('DELETE FROM nodes WHERE id = ?').run(id),
 }

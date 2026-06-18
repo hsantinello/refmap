@@ -2,6 +2,7 @@ import { app, BrowserWindow, nativeImage } from 'electron'
 import { join } from 'path'
 import { initDb } from './db'
 import { registerHandlers } from './ipc/handlers'
+import { initUpdater } from './updater'
 
 let win: BrowserWindow | null = null
 
@@ -52,7 +53,10 @@ function createWindow(): void {
 app.whenReady().then(() => {
   initDb()
   createWindow()
-  if (win) registerHandlers(win)
+  if (win) {
+    registerHandlers(win)
+    initUpdater(win)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
