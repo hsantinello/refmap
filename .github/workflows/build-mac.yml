@@ -27,7 +27,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-vite build && npx electron-builder --mac --x64 --arm64
+        run: npx electron-vite build && npx electron-builder --mac --universal
 
       - name: List dist files
         run: ls -la dist/
