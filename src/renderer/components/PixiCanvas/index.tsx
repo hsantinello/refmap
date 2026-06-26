@@ -55,14 +55,25 @@ const NSFW_KEYWORDS = [
   'erotic', 'explicit', 'pornographic',
   'adult content', 'adult material', 'adult only', 'sexually explicit', 'sexual content',
   'lingerie', 'uncensored',
-  'nudez', 'seio', 'pele nua', 'adulto', 'conteúdo adulto',
+  'nudez', 'seio', 'pele nua', 'conteúdo adulto', 'sexualmente explícito',
 ]
+
+// Palavras com símbolos/dígitos casam por substring; as demais por palavra
+// inteira (com acentos), para evitar falsos positivos como "breast" em
+// "breastplate" ou "adulto" em "homem adulto".
+const NSFW_SYMBOL_KW = new Set(['+18', '18+'])
+function tagIsNsfw(value: string): boolean {
+  const v = value.toLowerCase()
+  return NSFW_KEYWORDS.some(kw => {
+    if (NSFW_SYMBOL_KW.has(kw)) return v.includes(kw)
+    const pattern = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+')
+    return new RegExp(`(^|[^\\p{L}])${pattern}([^\\p{L}]|$)`, 'iu').test(v)
+  })
+}
 
 function isNsfwNode(node: PixiNode): boolean {
   const tags = node.data?.tags ?? []
-  return tags.some(tag =>
-    NSFW_KEYWORDS.some(kw => tag.value.toLowerCase().includes(kw))
-  )
+  return tags.some(tag => tagIsNsfw(tag.value))
 }
 
 // ─── constants ────────────────────────────────────────────────────────────────
@@ -73,6 +84,7 @@ const BG_COL   = 0x111111
 const SEL_COL  = 0xfb923c
 const MIN_ZOOM = 0.08, MAX_ZOOM = 4
 const DOT_SIZE = 130 // background dot grid pitch (larger = more spread out)
+const BASE_SFW_BLUR = 15 // força do blur do modo SFW em zoom 1 (escala com o zoom)
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -163,8 +175,26 @@ function redrawBg(node: PixiNode, worldScale = 1) {
 // ─── tags panel ───────────────────────────────────────────────────────────────
 
 const CAT_LABEL: Record<string, string> = {
-  style: 'Estilo', lighting: 'Luz', composition: 'Composição',
-  color: 'Cor', mood: 'Atmosfera', subject: 'Sujeito', description: 'Descrição',
+  style: 'Style', lighting: 'Lighting', composition: 'Composition',
+  color: 'Color', mood: 'Mood', subject: 'Subject', description: 'Description',
+}
+
+// Cache persistente de traduções de tags. Chaveado por `${idioma}:${valor}`
+// (bidirecional: en→pt e pt→en). A mesma tag costuma se repetir entre imagens,
+// então isso evita re-traduzir e mantém a troca de idioma instantânea, inclusive
+// entre reinícios do app.
+let tagTransCache: Record<string, string> = {}
+let tagTransCacheLoaded = false
+async function loadTagTransCache() {
+  if (tagTransCacheLoaded) return
+  tagTransCacheLoaded = true
+  try {
+    const raw = await window.api.getSetting('tagTranslations_v2')
+    if (raw) tagTransCache = JSON.parse(raw)
+  } catch { /* ignore */ }
+}
+function saveTagTransCache() {
+  window.api.setSetting('tagTranslations_v2', JSON.stringify(tagTransCache))
 }
 const CAT_ORDER = ['subject', 'style', 'lighting', 'composition', 'color', 'mood', 'description']
 
@@ -220,7 +250,9 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
   const toggleTag  = usePromptStore(s => s.toggleTag)
   const addTag     = usePromptStore(s => s.addTag)
   const removeTag  = usePromptStore(s => s.removeTag)
+  const updateTagText = usePromptStore(s => s.updateTagText)
   const updateNodeData = useCanvasStore(s => s.updateNodeData)
+  const appLang = useCanvasStore(s => s.appLang)
   const [palette, setPalette] = useState<string[]>([])
   const [copiedColor, setCopiedColor] = useState<string | null>(null)
   const [translatedMap, setTranslatedMap] = useState<Record<string, string> | null>(null)
@@ -230,6 +262,24 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
     if (!data.imagePath) return
     extractDominantColors(data.imagePath).then(setPalette)
   }, [data.imagePath])
+
+  // Idioma nativo das tags desta imagem (em que foram geradas/salvas).
+  const nativeLang: 'en' | 'pt' = data.tagLang ?? 'en'
+  const otherLang: 'en' | 'pt' = nativeLang === 'en' ? 'pt' : 'en'
+
+  // O painel é único e reaproveitado entre imagens. Ao trocar de imagem (ou de
+  // idioma global), redefine a exibição para o idioma do app: se as tags já
+  // estão nesse idioma (nativo), mostra direto; senão, traduz. O botão continua
+  // permitindo alternar manualmente.
+  useEffect(() => {
+    setTranslating(false)
+    if (appLang !== nativeLang && data.tags.length > 0) {
+      applyTranslation(appLang)
+    } else {
+      setTranslatedMap(null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeId, appLang, nativeLang, data.tags.length])
 
   const handleStar = () => {
     const next = !data.starred
@@ -260,21 +310,55 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
     }
   }
 
-  const handleTranslate = async () => {
-    if (translatedMap) { setTranslatedMap(null); return }
-    if (data.tags.length === 0 || translating) return
+  // Re-aponta as tags que já estão no Prompt Builder vindas deste node:
+  // troca o `value` de `from` para `to` para que o chip continue marcado
+  // como selecionado e o builder exiba a versão correta (traduzida ou EN).
+  const syncBuilderTag = (from: string, to: string) => {
+    if (!to || from === to) return
+    const pt = usePromptStore.getState().promptTags.find(
+      p => p.sourceNodeId === nodeId && p.value === from
+    )
+    if (pt) updateTagText(pt.id, to)
+  }
+
+  // Traduz as tags (que estão no idioma nativo) para `target`, usando o cache
+  // (só chama a API para o que falta) e sincroniza as tags já no builder.
+  const applyTranslation = async (target: 'en' | 'pt') => {
+    if (data.tags.length === 0) return
     setTranslating(true)
     try {
-      const values = data.tags.map(t => t.value)
-      const translated = await window.api.translateTags(values, 'pt')
+      await loadTagTransCache()
+      const key = (v: string) => `${target}:${v}`
+      const uniqueMissing = [...new Set(data.tags.map(t => t.value).filter(v => !(key(v) in tagTransCache)))]
+      if (uniqueMissing.length > 0) {
+        const res = await window.api.translateTags(uniqueMissing, target)
+        uniqueMissing.forEach((v, i) => { if (res[i]) tagTransCache[key(v)] = res[i] })
+        saveTagTransCache()
+      }
       const map: Record<string, string> = {}
-      data.tags.forEach((t, i) => { map[t.id] = translated[i] ?? t.value })
+      data.tags.forEach(t => { map[t.id] = tagTransCache[key(t.value)] ?? t.value })
+      data.tags.forEach(t => syncBuilderTag(t.value, map[t.id]))
       setTranslatedMap(map)
     } catch (err) {
       console.error('[translate]', err)
     } finally {
       setTranslating(false)
     }
+  }
+
+  // Volta para o idioma nativo: reverte as tags do builder para o valor original.
+  const revertTranslation = () => {
+    if (translatedMap) data.tags.forEach(t => syncBuilderTag(translatedMap[t.id] ?? t.value, t.value))
+    setTranslatedMap(null)
+  }
+
+  // translatedMap != null significa que estamos exibindo no idioma NÃO nativo.
+  const switchToLang = translatedMap ? nativeLang : otherLang
+
+  const handleTranslate = () => {
+    if (translating) return
+    if (translatedMap) revertTranslation()
+    else applyTranslation(otherLang)
   }
 
   return (
@@ -292,24 +376,22 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
               <button
                 onClick={handleTranslate}
                 disabled={translating}
-                title={translatedMap ? 'Voltar para inglês' : 'Traduzir tags para português'}
+                title={translating ? 'Traduzindo...' : `Mostrar em ${switchToLang === 'pt' ? 'português' : 'inglês'}`}
                 className={`text-[10px] px-1.5 py-0.5 rounded-md border transition-colors inline-flex items-center gap-1 ${
                   translating
                     ? 'text-white/30 border-white/[0.08] cursor-default bg-white/[0.04]'
                     : translatedMap
-                      ? 'text-sky-300/80 border-sky-500/30 bg-sky-500/[0.12] hover:bg-sky-500/20'
+                      ? 'text-white/70 border-white/[0.15] bg-white/[0.08] hover:bg-white/[0.12]'
                       : 'text-white/40 border-white/[0.08] hover:text-white/70 hover:bg-white/[0.07]'
                 }`}
               >
-                {translating ? (
-                  <>
-                    <svg className="animate-spin" width="9" height="9" viewBox="0 0 24 24" fill="none">
-                      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeOpacity="0.25"/>
-                      <path d="M12 3a9 9 0 019 9" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/>
-                    </svg>
-                    <span>PT-BR</span>
-                  </>
-                ) : translatedMap ? 'EN' : 'PT-BR'}
+                {translating && (
+                  <svg className="animate-spin" width="9" height="9" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeOpacity="0.25"/>
+                    <path d="M12 3a9 9 0 019 9" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/>
+                  </svg>
+                )}
+                <span>{switchToLang === 'pt' ? 'PT-BR' : 'EN'}</span>
               </button>
               <button
                 onClick={handleAddAll}
@@ -593,7 +675,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           node.blurMask = mask
         }
         node.sprite.mask = node.blurMask
-        node.sprite.filters = [new BlurFilter({ strength: 15, quality: 4 })]
+        node.sprite.filters = [new BlurFilter({ strength: BASE_SFW_BLUR * (worldRef.current?.scale.x ?? 1), quality: 4 })]
       } else {
         node.sprite.mask = null
         node.sprite.filters = []
@@ -772,7 +854,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             container.addChild(mask)
             state.blurMask = mask
             spr.mask = mask
-            spr.filters = [new BlurFilter({ strength: 15, quality: 4 })]
+            spr.filters = [new BlurFilter({ strength: BASE_SFW_BLUR * (worldRef.current?.scale.x ?? 1), quality: 4 })]
           }
           container.addChild(spr)
           if (state.bg) { container.removeChild(state.bg); container.addChild(state.bg) }
@@ -812,7 +894,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             container.addChild(mask)
             state.blurMask = mask
             sprite.mask = mask
-            sprite.filters = [new BlurFilter({ strength: 15, quality: 4 })]
+            sprite.filters = [new BlurFilter({ strength: BASE_SFW_BLUR * (worldRef.current?.scale.x ?? 1), quality: 4 })]
           }
           container.addChild(sprite)
           container.removeChild(bg); container.addChild(bg)
@@ -853,7 +935,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             node.blurMask = mask
           }
           node.sprite.mask = node.blurMask
-          node.sprite.filters = [new BlurFilter({ strength: 15, quality: 4 })]
+          node.sprite.filters = [new BlurFilter({ strength: BASE_SFW_BLUR * (worldRef.current?.scale.x ?? 1), quality: 4 })]
         } else {
           node.sprite.mask = null
           node.sprite.filters = []
@@ -894,7 +976,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           // Use thumbnail for AI analysis when available (avoids sending large originals)
           const node = nodesRef.current.get(nodeId)
           const pathForAI = node?.data.thumbnailPath || imagePath
-          const aiResult = await window.api.analyzeWithAI(pathForAI)
+          const aiResult = await window.api.analyzeWithAI(pathForAI, useCanvasStore.getState().appLang)
           description = typeof aiResult === 'string' ? aiResult : ''
           source = 'ai'
         } catch {
@@ -930,7 +1012,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             await window.api.updateNodeThumbnail(nodeId, pathForAI)
           } catch { pathForAI = imagePath }
         }
-        const aiResult = await window.api.analyzeWithAI(pathForAI)
+        const aiResult = await window.api.analyzeWithAI(pathForAI, useCanvasStore.getState().appLang)
         if (typeof aiResult === 'string' && aiResult) {
           description = aiResult
           source = 'ai'
@@ -958,9 +1040,12 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         return
       }
 
-      updatePixiNodeData(nodeId, { tags, metadataSource: source, modelName, isPending: false, isError: false })
+      // Idioma nativo das tags: o da análise quando geradas por IA; senão inglês
+      // (tags vindas de metadados são o prompt original, tratado como inglês).
+      const tagLang: 'en' | 'pt' = source === 'ai' ? useCanvasStore.getState().appLang : 'en'
+      updatePixiNodeData(nodeId, { tags, tagLang, metadataSource: source, modelName, isPending: false, isError: false })
       await window.api.updateNodeMetadata(nodeId, source, modelName)
-      await window.api.saveNodeTags(nodeId, tags.map(t => ({ id: t.id, category: t.category, value: t.value, source: t.source })))
+      await window.api.saveNodeTags(nodeId, tags.map(t => ({ id: t.id, category: t.category, value: t.value, source: t.source })), tagLang)
       flashSave()
     } catch (err) {
       console.error('[PixiCanvas] processImage:', err)
@@ -1176,7 +1261,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         state.blurMask = mask
       }
       spr.mask = state.blurMask
-      spr.filters = [new BlurFilter({ strength: 15, quality: 4 })]
+      spr.filters = [new BlurFilter({ strength: BASE_SFW_BLUR * (worldRef.current?.scale.x ?? 1), quality: 4 })]
     }
     state.container.addChild(spr)
     state.container.removeChild(state.bg); state.container.addChild(state.bg)
@@ -1477,6 +1562,15 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             }
           }
 
+          // SFW blur: escala a força do blur com o zoom para que a imagem
+          // borrada nunca fique discernível ao dar zoom in.
+          for (const [, node] of nodesRef.current) {
+            if (!node.blurMask || !node.sprite) continue
+            const f = node.sprite.filters
+            const bf = Array.isArray(f) ? f[0] : f
+            if (bf instanceof BlurFilter) bf.strength = BASE_SFW_BLUR * ws
+          }
+
           // Lazy loading: every 30 frames check for deferred nodes now in view
           if (app.ticker.lastTime % 500 < 20) {
             const vx = (-wc.x) / wc.scale.x, vy = (-wc.y) / wc.scale.y
@@ -1516,7 +1610,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
                         node.blurMask = mask
                       }
                       spr.mask = node.blurMask ?? null
-                      spr.filters = [new BlurFilter({ strength: 15, quality: 4 })]
+                      spr.filters = [new BlurFilter({ strength: BASE_SFW_BLUR * (worldRef.current?.scale.x ?? 1), quality: 4 })]
                     }
                     node.container?.addChild(spr)
                     if (node.bg && node.container) { node.container.removeChild(node.bg); node.container.addChild(node.bg) }

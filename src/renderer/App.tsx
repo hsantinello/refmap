@@ -83,6 +83,10 @@ export default function App() {
 
   useEffect(() => {
     const init = async () => {
+      // Restore app language preference
+      const lang = await window.api.getSetting('appLang')
+      useCanvasStore.getState().setAppLang(lang === 'pt' ? 'pt' : 'en')
+
       // Check onboarding
       const onboardingDone = await window.api.getSetting('onboardingCompleted')
       if (!onboardingDone) {
@@ -115,7 +119,7 @@ export default function App() {
             metadata_source: string; model_name?: string
             parent_id?: string; node_type?: string
             comfy_params?: string; linked_node_id?: string
-            thumbnail_path?: string; starred?: number
+            thumbnail_path?: string; starred?: number; tag_lang?: string
           }[]
           tags: { id: string; node_id: string; category: string; value: string; source: string }[]
         }
@@ -161,6 +165,7 @@ export default function App() {
                 value: t.value,
                 source: t.source as 'metadata',
               })),
+            tagLang: (n.tag_lang as 'en' | 'pt') ?? 'en',
             metadataSource: n.metadata_source as 'comfyui',
             modelName: n.model_name ?? undefined,
             isPending: false,

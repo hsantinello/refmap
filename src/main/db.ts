@@ -98,6 +98,13 @@ export function initDb(): void {
     db.exec('ALTER TABLE nodes ADD COLUMN starred INTEGER NOT NULL DEFAULT 0')
   }
 
+  // Migration: idioma nativo das tags (en/pt) — para não re-traduzir tags que já
+  // foram geradas no idioma alvo
+  const hasTagLang = (db.prepare("SELECT COUNT(*) as count FROM pragma_table_info('nodes') WHERE name='tag_lang'").get() as { count: number }).count
+  if (!hasTagLang) {
+    db.exec("ALTER TABLE nodes ADD COLUMN tag_lang TEXT NOT NULL DEFAULT 'en'")
+  }
+
   // Ensure thumbnails directory exists
   fs.mkdirSync(path.join(app.getPath('userData'), 'thumbnails'), { recursive: true })
 
@@ -166,6 +173,8 @@ export const nodeQueries = {
     getDb().prepare('UPDATE nodes SET thumbnail_path = ? WHERE id = ?').run(thumbPath, id),
   setStarred: (id: string, starred: boolean) =>
     getDb().prepare('UPDATE nodes SET starred = ? WHERE id = ?').run(starred ? 1 : 0, id),
+  setTagLang: (id: string, lang: string) =>
+    getDb().prepare('UPDATE nodes SET tag_lang = ? WHERE id = ?').run(lang, id),
   delete: (id: string) =>
     getDb().prepare('DELETE FROM nodes WHERE id = ?').run(id),
 }

@@ -23,7 +23,7 @@ const api = {
 
   // Metadata
   extractMetadata: (imagePath: string) => ipcRenderer.invoke('image:extractMetadata', imagePath),
-  analyzeWithAI: (imagePath: string) => ipcRenderer.invoke('image:analyzeWithAI', imagePath),
+  analyzeWithAI: (imagePath: string, lang?: 'en' | 'pt') => ipcRenderer.invoke('image:analyzeWithAI', imagePath, lang),
   createThumbnail: (imagePath: string): Promise<string> => ipcRenderer.invoke('image:createThumbnail', imagePath),
   readClipboardImage: (): Promise<string | null> => ipcRenderer.invoke('clipboard:readImage'),
 
@@ -89,7 +89,7 @@ const api = {
   updateNodePosition: (id: string, x: number, y: number) => ipcRenderer.invoke('node:updatePosition', id, x, y),
   updateNodeSize: (id: string, width: number, height: number) => ipcRenderer.invoke('node:updateSize', id, width, height),
   deleteNode: (id: string) => ipcRenderer.invoke('node:delete', id),
-  saveNodeTags: (nodeId: string, tags: unknown) => ipcRenderer.invoke('node:saveTags', nodeId, tags),
+  saveNodeTags: (nodeId: string, tags: unknown, tagLang?: 'en' | 'pt') => ipcRenderer.invoke('node:saveTags', nodeId, tags, tagLang),
   createGroupNode: (groupNode: { id: string; canvasId: string; x: number; y: number; width: number; height: number }, childIds: string[]) =>
     ipcRenderer.invoke('node:createGroup', groupNode, childIds),
   updateNodeParent: (id: string, parentId: string | null) => ipcRenderer.invoke('node:updateParent', id, parentId),

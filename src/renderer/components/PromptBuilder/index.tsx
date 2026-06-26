@@ -435,15 +435,22 @@ const MODEL_GROUPS = [
 ]
 // Flat list for label lookup
 const MODELS = MODEL_GROUPS.flatMap(g => g.models)
+const modelLabel = (id?: string) => id ? (MODELS.find(m => m.id === id)?.label ?? id) : undefined
+
+type HistoryEntry = { text: string; model?: string }
 
 export default function PromptBuilder() {
-  const { promptTags, reorderTags, clearAll, getPromptString, insertTagAt, removeTag } = usePromptStore()
+  const { promptTags, reorderTags, clearAll, getPromptString, insertTagAt, removeTag, updateTagText } = usePromptStore()
   const dragPointerRef = useRef({ x: 0, y: 0 })
   const dragCleanupRef = useRef<(() => void) | null>(null)
   const [insertIndex, setInsertIndex] = useState<number | null>(null)
   const [copied, setCopied]           = useState(false)
-  const [history, setHistory]         = useState<string[]>([])
+  const [history, setHistory]         = useState<HistoryEntry[]>([])
   const [showHistory, setShowHistory] = useState(false)
+  const [hoverHistory, setHoverHistory] = useState<{ idx: number; left: number; bottom: number } | null>(null)
+  const historyHideRef = useRef<number | null>(null)
+  const cancelHistoryHide = () => { if (historyHideRef.current) { clearTimeout(historyHideRef.current); historyHideRef.current = null } }
+  const scheduleHistoryHide = () => { cancelHistoryHide(); historyHideRef.current = window.setTimeout(() => setHoverHistory(null), 150) }
   const currentCanvasId = useCanvasStore(s => s.currentCanvasId)
 
   useEffect(() => {
@@ -468,7 +475,17 @@ export default function PromptBuilder() {
   useEffect(() => {
     if (!currentCanvasId) return
     window.api.getSetting(`promptHistory_${currentCanvasId}`).then(raw => {
-      if (raw) try { setHistory(JSON.parse(raw)) } catch {}
+      if (!raw) { setHistory([]); return }
+      try {
+        const parsed = JSON.parse(raw)
+        // Compat: entradas antigas eram strings; novas são { text, model }.
+        const normalized: HistoryEntry[] = Array.isArray(parsed)
+          ? parsed.map((e: unknown) => typeof e === 'string'
+              ? { text: e }
+              : { text: (e as HistoryEntry).text, model: (e as HistoryEntry).model })
+          : []
+        setHistory(normalized)
+      } catch { setHistory([]) }
     })
   }, [currentCanvasId])
   const [hasOpenAIKey, setHasOpenAIKey] = useState(false)
@@ -477,6 +494,9 @@ export default function PromptBuilder() {
   const [showModels, setShowModels] = useState(false)
   const [optimizing, setOptimizing] = useState(false)
   const [optimizeError, setOptimizeError] = useState<string | null>(null)
+  const [translatingPrompt, setTranslatingPrompt] = useState(false)
+  const [promptTranslated, setPromptTranslated] = useState(false)
+  const preTranslateRef = useRef<{ tags: { id: string; value: string }[]; input: string } | null>(null)
   const [dropdownPos, setDropdownPos] = useState({ x: 0, y: 0 })
   const modelRef = useRef<HTMLDivElement>(null)
   const modelBtnRef = useRef<HTMLButtonElement>(null)
@@ -560,7 +580,7 @@ export default function PromptBuilder() {
     setTimeout(() => setCopied(false), 1500)
     // Save to history (max 10 entries, deduplicated)
     if (currentCanvasId) {
-      const newHistory = [text, ...history.filter(h => h !== text)].slice(0, 10)
+      const newHistory: HistoryEntry[] = [{ text }, ...history.filter(h => h.text !== text)].slice(0, 10)
       setHistory(newHistory)
       window.api.setSetting(`promptHistory_${currentCanvasId}`, JSON.stringify(newHistory))
     }
@@ -569,6 +589,49 @@ export default function PromptBuilder() {
   const handleClearAll = () => {
     clearAll()
     setInputText('')
+    setPromptTranslated(false)
+    preTranslateRef.current = null
+  }
+
+  const handleTranslatePrompt = async () => {
+    if (translatingPrompt) return
+
+    // Já traduzido → reverte para os valores originais guardados.
+    if (promptTranslated) {
+      const orig = preTranslateRef.current
+      if (orig) {
+        orig.tags.forEach(t => updateTagText(t.id, t.value))
+        setInputText(orig.input)
+      }
+      setPromptTranslated(false)
+      preTranslateRef.current = null
+      return
+    }
+
+    const inputTrim = inputText.trim()
+    const values = promptTags.map(t => t.value)
+    if (inputTrim) values.push(inputTrim)
+    if (values.length === 0) return
+
+    setTranslatingPrompt(true)
+    try {
+      const translated = await window.api.translateTags(values, 'pt')
+      // Guarda originais para conseguir voltar ao inglês.
+      preTranslateRef.current = {
+        tags: promptTags.map(t => ({ id: t.id, value: t.value })),
+        input: inputText,
+      }
+      promptTags.forEach((t, i) => { if (translated[i]) updateTagText(t.id, translated[i]) })
+      if (inputTrim) {
+        const ti = translated[promptTags.length]
+        if (ti) setInputText(ti)
+      }
+      setPromptTranslated(true)
+    } catch (err) {
+      console.error('[translate-prompt]', err)
+    } finally {
+      setTranslatingPrompt(false)
+    }
   }
 
   const handleSelectModel = async (modelId: string) => {
@@ -592,9 +655,11 @@ export default function PromptBuilder() {
       clearAll()
       setInputText(text)
       setTargetModel(null)
-      // Save optimized prompt to history
+      setPromptTranslated(false)
+      preTranslateRef.current = null
+      // Save optimized prompt to history (com o modelo pelo qual foi otimizado)
       if (currentCanvasId) {
-        const newHistory = [text, ...history.filter(h => h !== text)].slice(0, 10)
+        const newHistory: HistoryEntry[] = [{ text, model: modelId }, ...history.filter(h => h.text !== text)].slice(0, 10)
         setHistory(newHistory)
         window.api.setSetting(`promptHistory_${currentCanvasId}`, JSON.stringify(newHistory))
       }
@@ -761,6 +826,28 @@ export default function PromptBuilder() {
             {hasOpenAIKey && <MicButton onTranscript={text => setInputText(prev => prev ? prev + ' ' + text : text)} />}
             {hasContent && (
               <button
+                onClick={handleTranslatePrompt}
+                disabled={translatingPrompt}
+                title={translatingPrompt ? 'Traduzindo...' : promptTranslated ? 'Voltar para inglês' : 'Traduzir prompt para português'}
+                className={`text-[11px] px-2 py-0.5 rounded-md transition-colors shrink-0 inline-flex items-center gap-1 ${
+                  translatingPrompt
+                    ? 'text-white/30 cursor-default'
+                    : promptTranslated
+                      ? 'text-white/70 bg-white/[0.10] hover:bg-white/[0.14]'
+                      : 'text-white/30 hover:text-white/65 hover:bg-white/[0.06]'
+                }`}
+              >
+                {translatingPrompt && (
+                  <svg className="animate-spin" width="10" height="10" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeOpacity="0.25"/>
+                    <path d="M12 3a9 9 0 019 9" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/>
+                  </svg>
+                )}
+                <span>{promptTranslated ? 'EN' : 'PT-BR'}</span>
+              </button>
+            )}
+            {hasContent && (
+              <button
                 onClick={handleClearAll}
                 className="text-[11px] text-white/30 hover:text-white/65 transition-colors px-2 py-0.5 rounded-md hover:bg-white/[0.06] shrink-0"
               >
@@ -822,17 +909,29 @@ export default function PromptBuilder() {
                 transition={{ duration: 0.18, ease: 'easeOut' }}
                 style={{ overflow: 'hidden' }}
               >
-                <div className="border-t border-white/[0.06] px-4 pt-3 pb-2 flex flex-col gap-1.5">
+                <div className="relative border-t border-white/[0.06] px-4 pt-3 pb-2 flex flex-col gap-1.5">
                   <span className="text-[9px] uppercase tracking-widest text-white/25 font-semibold mb-1">Histórico</span>
                   <div className="flex flex-col gap-1.5 max-h-[60px] overflow-y-auto">
                     {history.map((h, i) => (
                       <button
                         key={i}
-                        onClick={() => { navigator.clipboard.writeText(h); setCopied(true); setTimeout(() => setCopied(false), 1500); setShowHistory(false) }}
-                        className="text-left text-[11px] text-white/45 hover:text-white/75 hover:bg-white/[0.04] rounded-lg px-2 py-1 transition-colors truncate shrink-0"
-                        title={h}
+                        onClick={() => { navigator.clipboard.writeText(h.text); setCopied(true); setTimeout(() => setCopied(false), 1500); setShowHistory(false) }}
+                        onMouseEnter={e => {
+                          cancelHistoryHide()
+                          const r = e.currentTarget.getBoundingClientRect()
+                          const W = 300
+                          const left = r.right + 8 + W > window.innerWidth ? r.left - 8 - W : r.right + 8
+                          setHoverHistory({ idx: i, left, bottom: window.innerHeight - r.bottom })
+                        }}
+                        onMouseLeave={scheduleHistoryHide}
+                        className="group flex items-center gap-2 text-left text-[11px] text-white/45 hover:text-white/75 hover:bg-white/[0.04] rounded-lg px-2 py-1 transition-colors shrink-0"
                       >
-                        {h}
+                        <span className="truncate flex-1 min-w-0">{h.text}</span>
+                        {h.model && (
+                          <span className="shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-orange-500/[0.12] text-orange-300/80 border border-orange-500/20">
+                            {modelLabel(h.model)}
+                          </span>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -843,6 +942,26 @@ export default function PromptBuilder() {
 
         </div>
       </div>
+
+      {/* Preview do prompt completo ao passar o mouse (portal — evita o clip do painel) */}
+      {showHistory && hoverHistory && history[hoverHistory.idx] && createPortal(
+        <div
+          className="fixed z-[9999] w-[300px] pointer-events-auto rm-panel !border-transparent rounded-xl p-3 shadow-[0_25px_50px_-12px_rgba(0,0,0,0.8)]"
+          style={{ left: hoverHistory.left, bottom: hoverHistory.bottom }}
+          onMouseEnter={cancelHistoryHide}
+          onMouseLeave={scheduleHistoryHide}
+        >
+          {history[hoverHistory.idx].model && (
+            <div className="mb-1.5 text-[9px] uppercase tracking-widest font-semibold text-orange-300/70">
+              {modelLabel(history[hoverHistory.idx].model)}
+            </div>
+          )}
+          <div className="text-[11px] leading-relaxed text-white/70 whitespace-pre-wrap max-h-[240px] overflow-y-auto" data-scrollable>
+            {history[hoverHistory.idx].text}
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   )
 }

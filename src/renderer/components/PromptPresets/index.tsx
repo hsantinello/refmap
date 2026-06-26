@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { usePromptStore } from '../../store'
+import { usePromptStore, useCanvasStore } from '../../store'
 import { useMyPresets } from '../../hooks/useMyPresets'
 
 const PRESETS: { group: string; items: string[] }[] = [
@@ -57,11 +57,34 @@ const PRESETS: { group: string; items: string[] }[] = [
   },
 ]
 
+const GROUP_PT: Record<string, string> = {
+  'Angle of View': 'Ângulo de Visão',
+  'Artists': 'Artistas',
+  'Character Types': 'Tipos de Personagem',
+  'Colors': 'Cores',
+  'Composition': 'Composição',
+  'Composition Form': 'Forma de Composição',
+  'Lighting': 'Iluminação',
+  'Negative': 'Negativo',
+  'Picture Effect': 'Efeito de Imagem',
+  'Picture Quality': 'Qualidade de Imagem',
+  'Setting': 'Cenário',
+  'Shot': 'Tomada',
+  'Style': 'Estilo',
+}
+
 export default function PromptPresets() {
   const [open, setOpen] = useState(false)
   const [activeGroup, setActiveGroup] = useState<string | null>(null)
   const [showCategories, setShowCategories] = useState(false)
   const [search, setSearch] = useState('')
+  const appLang = useCanvasStore(s => s.appLang)
+  const [translated, setTranslated] = useState(appLang === 'pt')
+  const [translating, setTranslating] = useState(false)
+  const [transMap, setTransMap] = useState<Record<string, string>>({})
+
+  // Segue o idioma global do app (mas o botão ainda permite trocar localmente).
+  useEffect(() => { setTranslated(appLang === 'pt') }, [appLang])
   const addTag = usePromptStore(s => s.addTag)
   const { myPresets, addPreset, removePreset, editPreset } = useMyPresets()
   const [editingItem, setEditingItem] = useState<string | null>(null)
@@ -101,7 +124,57 @@ export default function PromptPresets() {
     : activeGroup
       ? (PRESETS.find(g => g.group === activeGroup)?.items ?? [])
       : allItems
-  const filtered = search ? currentItems.filter(i => i.toLowerCase().includes(search.toLowerCase())) : currentItems
+
+  // Texto exibido para um item / nome de grupo conforme o idioma ativo.
+  const disp = (item: string) => translated ? (transMap[item] ?? item) : item
+  const dispGroup = (g: string) => translated ? (GROUP_PT[g] ?? g) : g
+
+  // Carrega o cache de traduções salvo em disco (presets são fixos, então a
+  // tradução é estável e não precisa ser refeita entre reinícios do app).
+  useEffect(() => {
+    window.api.getSetting('presetTranslations_pt').then(raw => {
+      if (raw) try { setTransMap(JSON.parse(raw)) } catch {}
+    })
+  }, [])
+
+  // Quando a tradução está ativa, garante que os itens do grupo atual estejam
+  // traduzidos (em lotes, com cache). Presets do usuário não são traduzidos.
+  useEffect(() => {
+    if (!translated || activeGroup === 'Meus Presets') return
+    const missing = currentItems.filter(i => !(i in transMap))
+    if (missing.length === 0) return
+    let cancelled = false
+    ;(async () => {
+      setTranslating(true)
+      try {
+        const CHUNK = 40
+        const updates: Record<string, string> = {}
+        for (let i = 0; i < missing.length; i += CHUNK) {
+          const batch = missing.slice(i, i + CHUNK)
+          const res = await window.api.translateTags(batch, 'pt')
+          batch.forEach((orig, j) => { if (res[j]) updates[orig] = res[j] })
+        }
+        if (!cancelled) setTransMap(prev => {
+          const merged = { ...prev, ...updates }
+          window.api.setSetting('presetTranslations_pt', JSON.stringify(merged))
+          return merged
+        })
+      } catch (e) {
+        console.error('[presets-translate]', e)
+      } finally {
+        if (!cancelled) setTranslating(false)
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [translated, activeGroup])
+
+  const filtered = search
+    ? currentItems.filter(i => {
+        const s = search.toLowerCase()
+        return i.toLowerCase().includes(s) || disp(i).toLowerCase().includes(s)
+      })
+    : currentItems
 
   return (
     <div ref={containerRef}>
@@ -138,15 +211,37 @@ export default function PromptPresets() {
         >
           {/* Category selector */}
           <div className="relative px-2 pt-2 shrink-0">
-            <button
-              onClick={() => setShowCategories(v => !v)}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.07] hover:bg-white/[0.07] transition-colors"
-            >
-              <span className="text-[11px] font-semibold text-orange-400/80">{activeGroup ?? 'Categorias'}</span>
-              <svg width="10" height="10" viewBox="0 0 10 6" fill="none">
-                <path d={showCategories ? 'M1 5L5 1L9 5' : 'M1 1L5 5L9 1'} stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setShowCategories(v => !v)}
+                className="flex-1 flex items-center justify-between px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.07] hover:bg-white/[0.07] transition-colors"
+              >
+                <span className="text-[11px] font-semibold text-orange-400/80">{activeGroup ? dispGroup(activeGroup) : 'Categorias'}</span>
+                <svg width="10" height="10" viewBox="0 0 10 6" fill="none">
+                  <path d={showCategories ? 'M1 5L5 1L9 5' : 'M1 1L5 5L9 1'} stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+              <button
+                onClick={() => setTranslated(v => !v)}
+                disabled={translating}
+                title={translating ? 'Traduzindo...' : translated ? 'Voltar para inglês' : 'Traduzir para português'}
+                className={`text-[11px] px-2 py-2 rounded-lg border transition-colors shrink-0 inline-flex items-center gap-1 ${
+                  translating
+                    ? 'text-white/30 border-white/[0.07] cursor-default bg-white/[0.04]'
+                    : translated
+                      ? 'text-white/70 border-white/[0.15] bg-white/[0.08] hover:bg-white/[0.12]'
+                      : 'text-white/40 border-white/[0.07] bg-white/[0.04] hover:text-white/70 hover:bg-white/[0.07]'
+                }`}
+              >
+                {translating && (
+                  <svg className="animate-spin" width="10" height="10" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeOpacity="0.25"/>
+                    <path d="M12 3a9 9 0 019 9" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/>
+                  </svg>
+                )}
+                <span>{translated ? 'EN' : 'PT-BR'}</span>
+              </button>
+            </div>
             {showCategories && (
               <div className="absolute left-2 right-2 top-full mt-1 z-50 rounded-xl border border-white/[0.1] overflow-y-auto" style={{ maxHeight: '220px', background: 'rgba(22, 20, 18, 0.85)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)', boxShadow: '0 12px 32px rgba(0,0,0,0.6)' }} data-scrollable>
                 <button
@@ -177,7 +272,7 @@ export default function PromptPresets() {
                         : 'text-white/50 hover:text-white/80 hover:bg-white/[0.05]'
                     }`}
                   >
-                    {g.group}
+                    {dispGroup(g.group)}
                   </button>
                 ))}
               </div>
@@ -216,10 +311,10 @@ export default function PromptPresets() {
               ) : (
                 <div key={item} className="group flex items-center gap-1 px-1 rounded-lg hover:bg-white/[0.05] transition-colors">
                   <button
-                    onClick={() => handleAdd(item)}
+                    onClick={() => handleAdd(disp(item))}
                     className="flex-1 text-left px-2 py-1.5 text-[11.5px] text-white/50 group-hover:text-white/85 transition-colors"
                   >
-                    {item}
+                    {disp(item)}
                   </button>
                   {activeGroup === 'Meus Presets' && (
                     <>

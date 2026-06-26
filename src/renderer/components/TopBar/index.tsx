@@ -37,6 +37,14 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
   const currentCanvasId = useCanvasStore(s => s.currentCanvasId)
   const sfwMode         = useCanvasStore(s => s.sfwMode)
   const setSfwMode      = useCanvasStore(s => s.setSfwMode)
+  const appLang         = useCanvasStore(s => s.appLang)
+  const setAppLang      = useCanvasStore(s => s.setAppLang)
+
+  const handleToggleLang = () => {
+    const next = appLang === 'pt' ? 'en' : 'pt'
+    setAppLang(next)
+    window.api.setSetting('appLang', next)
+  }
 
   const handleConnectionClick = () => {
     if (!hasApiKey) { onOpenSettings(); return }
@@ -269,7 +277,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
         id: string; image_path: string; position_x: number
         position_y: number; width: number; height: number; metadata_source: string
         model_name?: string; node_type?: string; parent_id?: string | null
-        comfy_params?: string; linked_node_id?: string
+        comfy_params?: string; linked_node_id?: string; tag_lang?: string
       }[]
       tags: { id: string; node_id: string; category: string; value: string; source: string }[]
     }
@@ -330,6 +338,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
             tags: tags
               .filter(t => t.node_id === n.id)
               .map(t => ({ id: t.id, category: t.category as 'style', value: t.value, source: t.source as 'metadata' })),
+            tagLang: (n.tag_lang as 'en' | 'pt') ?? 'en',
             metadataSource: n.metadata_source as 'comfyui',
             modelName: n.model_name ?? undefined,
             isPending: false,
@@ -471,6 +480,22 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
               </div>
             </button>
             <div className="h-px bg-white/[0.05] mx-3" />
+            <button
+              onClick={handleToggleLang}
+              style={{ padding: '10px 20px' }}
+              className="w-full flex items-center justify-between gap-3 text-[12px] text-white/60 hover:text-white/90 hover:bg-white/[0.05] transition-colors text-left"
+            >
+              <div className="flex items-center gap-3">
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none" className="shrink-0">
+                  <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.3"/>
+                  <path d="M1 7h12M7 1c1.8 1.6 2.8 3.8 2.8 6S8.8 12.4 7 14M7 1C5.2 2.6 4.2 4.8 4.2 7S5.2 12.4 7 14" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/>
+                </svg>
+                Idioma
+              </div>
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-white/[0.08] text-white/70 shrink-0">
+                {appLang === 'pt' ? 'PT-BR' : 'EN'}
+              </span>
+            </button>
             <button
               onClick={() => { onOpenTutorial(); setShowLogoMenu(false) }}
               style={{ padding: '10px 20px' }}

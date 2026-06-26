@@ -33,6 +33,7 @@ export interface ImageNodeData extends Record<string, unknown> {
   thumbnailPath?: string
   starred?: boolean
   tags: Tag[]
+  tagLang?: 'en' | 'pt'
   metadataSource: 'comfyui' | 'a1111' | 'midjourney' | 'ai' | 'none' | 'group'
   modelName?: string
   isPending: boolean
@@ -61,12 +62,14 @@ interface CanvasStore {
   currentCanvasId: string | null
   canvasList: { id: string; name: string; updated_at: number }[]
   sfwMode: boolean
+  appLang: 'en' | 'pt'
 
   setNodes: (nodes: Node<ImageNodeData>[]) => void
   setEdges: (edges: Edge[]) => void
   setCurrentCanvasId: (id: string) => void
   setCanvasList: (list: { id: string; name: string; updated_at: number }[]) => void
   setSfwMode: (v: boolean) => void
+  setAppLang: (v: 'en' | 'pt') => void
 
   addImageNode: (imagePath: string, position: XYPosition, canvasId: string, width?: number) => string
   addGroupNode: (id: string, position: XYPosition, size: { width: number; height: number }, canvasId: string) => void
@@ -95,12 +98,14 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   currentCanvasId: null,
   canvasList: [],
   sfwMode: false,
+  appLang: 'en',
 
   setNodes: (nodes) => set({ nodes }),
   setEdges: (edges) => set({ edges }),
   setCurrentCanvasId: (id) => set({ currentCanvasId: id }),
   setCanvasList: (list) => set({ canvasList: list }),
   setSfwMode: (v) => set({ sfwMode: v }),
+  setAppLang: (v) => set({ appLang: v }),
 
   addImageNode: (imagePath, position, canvasId, width = 240) => {
     const id = uuid()

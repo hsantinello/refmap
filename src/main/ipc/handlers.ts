@@ -67,8 +67,10 @@ export function registerHandlers(win: BrowserWindow): void {
   })
 
   // ── AI analysis ───────────────────────────────────────────────────────
-  ipcMain.handle('image:analyzeWithAI', async (_e, imagePath: string) => {
-    const cached = aiCacheQueries.get(imagePath)
+  ipcMain.handle('image:analyzeWithAI', async (_e, imagePath: string, lang: 'en' | 'pt' = 'en') => {
+    // Cache por idioma: análise em PT e em EN são entradas separadas.
+    const cacheKey = lang === 'pt' ? `${imagePath}::pt` : imagePath
+    const cached = aiCacheQueries.get(cacheKey)
     if (cached && typeof cached === 'string' && /\{[^}]+\}/.test(cached)) return cached
 
     const provider = settingQueries.get('aiProvider') || 'anthropic'
@@ -98,6 +100,7 @@ export function registerHandlers(win: BrowserWindow): void {
           tags = await analyzeWithOpenAI(imagePath, apiKey, {
             baseURL: 'https://api.together.xyz/v1',
             model,
+            lang,
           })
           if (tags) break
         } catch { /* try next */ }
@@ -108,16 +111,16 @@ export function registerHandlers(win: BrowserWindow): void {
         if (!fallbackEncrypted) throw new Error('Nenhum modelo de visão disponível. Configure uma chave OpenAI ou Anthropic.')
         const fallbackKey = safeStorage.decryptString(Buffer.from(fallbackEncrypted, 'hex'))
         tags = encryptedAnthropic
-          ? await analyzeWithAnthropic(imagePath, fallbackKey)
-          : await analyzeWithOpenAI(imagePath, fallbackKey)
+          ? await analyzeWithAnthropic(imagePath, fallbackKey, lang)
+          : await analyzeWithOpenAI(imagePath, fallbackKey, { lang })
       }
     } else if (provider === 'anthropic') {
-      tags = await analyzeWithAnthropic(imagePath, apiKey)
+      tags = await analyzeWithAnthropic(imagePath, apiKey, lang)
     } else {
-      tags = await analyzeWithOpenAI(imagePath, apiKey)
+      tags = await analyzeWithOpenAI(imagePath, apiKey, { lang })
     }
 
-    aiCacheQueries.set(imagePath, tags)
+    aiCacheQueries.set(cacheKey, tags)
     return tags
   })
 
@@ -212,7 +215,7 @@ export function registerHandlers(win: BrowserWindow): void {
       const client = new Anthropic({ apiKey })
       const msg = await client.messages.create({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1024,
+        max_tokens: 2048,
         messages: [{ role: 'user', content: prompt }],
       })
       const block = msg.content[0]
@@ -384,9 +387,10 @@ export function registerHandlers(win: BrowserWindow): void {
     nodeQueries.delete(id)
     return true
   })
-  ipcMain.handle('node:saveTags', (_e, nodeId: string, tags: Parameters<typeof tagQueries.insertMany>[1]) => {
+  ipcMain.handle('node:saveTags', (_e, nodeId: string, tags: Parameters<typeof tagQueries.insertMany>[1], tagLang?: 'en' | 'pt') => {
     tagQueries.deleteByNode(nodeId)
     if (tags.length > 0) tagQueries.insertMany(nodeId, tags)
+    if (tagLang) nodeQueries.setTagLang(nodeId, tagLang)
     return true
   })
 

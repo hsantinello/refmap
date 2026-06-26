@@ -2,7 +2,11 @@ import Anthropic from '@anthropic-ai/sdk'
 import fs from 'fs/promises'
 import path from 'path'
 
-const VISION_PROMPT = `Analyze this AI-generated image and describe it as detailed prompt chunks for image generation.
+function buildVisionPrompt(lang: 'en' | 'pt' = 'en'): string {
+  const langRule = lang === 'pt'
+    ? '- Write every chunk in Brazilian Portuguese'
+    : '- Write in English'
+  return `Analyze this AI-generated image and describe it as detailed prompt chunks for image generation.
 
 Format: {main subject}[modifier][modifier]...
 
@@ -20,13 +24,14 @@ Rules:
 - Create 15-25 chunks total
 - Each chunk is a short, specific, prompt-ready phrase
 - Be precise and descriptive — avoid generic terms like "beautiful" or "nice"
-- Write in English
+${langRule}
 - If the image contains nudity, explicit sexual content, or adult-only material, include [nsfw] as one of the chunks
 - Return ONLY the formatted string, nothing else
 
 Example: {a female warrior}[long silver braided hair][wearing dark leather armor][holding a glowing sword][fierce determined expression][standing on a cliff edge][stormy sky background][dramatic rim lighting][deep shadows][cool blue and purple color grade][cinematic composition][low angle shot][hyperrealistic digital art][8k ultra detailed][volumetric fog][epic fantasy atmosphere]`
+}
 
-export async function analyzeWithAnthropic(imagePath: string, apiKey: string): Promise<string> {
+export async function analyzeWithAnthropic(imagePath: string, apiKey: string, lang: 'en' | 'pt' = 'en'): Promise<string> {
   const client = new Anthropic({ apiKey })
 
   const imageBuffer = await fs.readFile(imagePath)
@@ -42,7 +47,7 @@ export async function analyzeWithAnthropic(imagePath: string, apiKey: string): P
       role: 'user',
       content: [
         { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-        { type: 'text', text: VISION_PROMPT },
+        { type: 'text', text: buildVisionPrompt(lang) },
       ],
     }],
   })
