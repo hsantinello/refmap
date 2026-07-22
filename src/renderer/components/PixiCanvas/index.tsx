@@ -5,6 +5,44 @@ import { useShallow } from 'zustand/react/shallow'
 import { v4 as uuid } from 'uuid'
 import PromptPresets from '../PromptPresets'
 
+// ─── busca: normalização + sinônimos/hiperônimos bilíngues (PT↔EN) ───────────
+// Compara sem acento e sem caixa ("cão" == "cao", "Gato" == "gato").
+const searchNorm = (s: string) => s.normalize('NFD').split('').filter(ch => { const c = ch.charCodeAt(0); return c < 0x300 || c > 0x36f }).join('').toLowerCase()
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+// Grupos de termos equivalentes: buscar qualquer termo do grupo acende os demais,
+// então "cachorro" acha tags em inglês ("dog"/"puppy") ou por raça ("shih tzu").
+const SEARCH_SYNONYMS: string[][] = [
+  ['cachorro', 'cachorra', 'cachorrinho', 'cao', 'caes', 'cadela', 'filhote', 'dog', 'dogs', 'doggo', 'puppy', 'puppies', 'pup', 'canine', 'shih tzu', 'poodle', 'labrador', 'bulldog', 'golden retriever', 'pug', 'vira-lata', 'pastor alemao'],
+  ['gato', 'gata', 'gatinho', 'gatinha', 'felino', 'cat', 'cats', 'kitten', 'kittens', 'kitty', 'feline', 'tabby', 'siames', 'persa', 'ragdoll'],
+  ['passaro', 'ave', 'aves', 'bird', 'birds', 'papagaio', 'parrot', 'canario', 'coruja', 'owl'],
+  ['cavalo', 'egua', 'horse', 'horses', 'ponei', 'pony', 'potro', 'foal'],
+  ['homem', 'homens', 'man', 'men'],
+  ['mulher', 'mulheres', 'woman', 'women'],
+  ['pessoa', 'pessoas', 'humano', 'humana', 'human', 'humans', 'person', 'people'],
+  ['crianca', 'criancas', 'menino', 'menina', 'boy', 'girl', 'child', 'children', 'kid', 'kids'],
+  ['bebe', 'baby', 'babies'],
+  ['carro', 'automovel', 'car', 'cars', 'veiculo', 'vehicle', 'automobile'],
+  ['flor', 'flores', 'flower', 'flowers', 'floral', 'rosa', 'rose'],
+  ['arvore', 'arvores', 'tree', 'trees', 'floresta', 'forest', 'mata'],
+  ['casa', 'lar', 'house', 'home', 'building', 'predio', 'edificio'],
+  ['comida', 'alimento', 'food', 'prato', 'dish', 'meal', 'refeicao'],
+  ['praia', 'beach', 'mar', 'sea', 'ocean', 'oceano'],
+  ['montanha', 'montanhas', 'mountain', 'mountains', 'serra'],
+]
+// Expande a query (já normalizada) com os grupos de sinônimos aplicáveis.
+const expandSearchQuery = (nq: string): string[] => {
+  const out = new Set<string>([nq])
+  if (nq.length >= 3) {
+    for (const group of SEARCH_SYNONYMS) {
+      const g = group.map(searchNorm)
+      // Expande o grupo só quando a query é um termo exato OU seu prefixo
+      // (ex.: "cac" → cachorro), nunca por substring solta (evita "man" em "human").
+      if (g.some(t => t === nq || t.startsWith(nq))) for (const t of g) out.add(t)
+    }
+  }
+  return [...out]
+}
+
 // ─── texture cache (module-level — persists across canvas tab switches) ──────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _textureCache = new Map<string, { texture: any; w: number; h: number }>()
@@ -255,6 +293,7 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
   const appLang = useCanvasStore(s => s.appLang)
   const [palette, setPalette] = useState<string[]>([])
   const [copiedColor, setCopiedColor] = useState<string | null>(null)
+  const [copiedTags, setCopiedTags] = useState(false)
   const [translatedMap, setTranslatedMap] = useState<Record<string, string> | null>(null)
   const [translating, setTranslating] = useState(false)
 
@@ -288,7 +327,12 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
     window.dispatchEvent(new CustomEvent('starred-changed', { detail: { nodeId, starred: next } }))
   }
 
-  const grouped = groupTagsByCategory(data.tags)
+  // Separa tags de IA (source 'ai') das de metadado, para a seção "✨ Analisado por IA".
+  const aiTags = data.tags.filter(t => t.source === 'ai')
+  const metaTags = data.tags.filter(t => t.source !== 'ai')
+  const mixed = aiTags.length > 0 && metaTags.length > 0
+  const primaryGroups = mixed ? groupTagsByCategory(metaTags) : groupTagsByCategory(data.tags)
+  const aiGroups = mixed ? groupTagsByCategory(aiTags) : []
   const b0 = SRC_BADGE[data.metadataSource] ?? null
   const badge = b0 && data.metadataSource === 'comfyui' && data.modelName
     ? { ...b0, label: `ComfyUI — ${data.modelName}` } : b0
@@ -308,6 +352,16 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
         addTag({ ...tag, value: displayValue }, nodeId)
       })
     }
+  }
+
+  // Copia todas as tags exibidas (metadado + IA) como lista separada por vírgula,
+  // respeitando o idioma atual (traduzido ou nativo) — igual ao "+ todas".
+  const handleCopyTags = () => {
+    if (data.tags.length === 0) return
+    const text = data.tags.map(t => translatedMap?.[t.id] ?? t.value).join(', ')
+    navigator.clipboard.writeText(text)
+    setCopiedTags(true)
+    setTimeout(() => setCopiedTags(false), 1500)
   }
 
   // Re-aponta as tags que já estão no Prompt Builder vindas deste node:
@@ -361,14 +415,50 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
     else applyTranslation(otherLang)
   }
 
+  const renderGroup = ([cat, tags]: [string, Tag[]]) => (
+    <div key={cat} className="flex flex-col gap-1 items-start">
+      <span className="text-[9px] uppercase tracking-widest text-white/25 font-semibold leading-none">
+        {CAT_LABEL[cat] ?? cat}
+      </span>
+      <div className="flex flex-wrap justify-start gap-1 w-full">
+        {tags.map(tag => {
+          const displayValue = translatedMap?.[tag.id] ?? tag.value
+          const active = promptTags.some(pt => pt.value === displayValue)
+          return (
+            <button key={tag.id}
+              onClick={e => { e.stopPropagation(); toggleTag({ ...tag, value: displayValue }, nodeId) }}
+              onContextMenu={e => { e.preventDefault(); e.stopPropagation(); window.dispatchEvent(new CustomEvent('save-to-my-presets', { detail: { value: displayValue } })) }}
+              className={`rm-chip ${active ? 'is-active' : ''}`}
+              title={active ? 'Remover do builder' : 'Adicionar ao builder'}
+            >{displayValue}</button>
+          )
+        })}
+      </div>
+    </div>
+  )
+
   return (
     <div className="flex flex-col gap-2 bg-[#111111] rounded-2xl border border-white/[0.08] p-3 shadow-2xl" style={{ width: 260 }}>
       <div className="flex items-center justify-between">
         {badge ? (
-          <div className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 border whitespace-nowrap ${badge.cls}`}>
+          <button
+            onClick={e => {
+              e.stopPropagation()
+              if (data.isPending) return
+              window.api.getSetting('apiKey_anthropic').then(k1 =>
+                window.api.getSetting('apiKey_openai').then(k2 => {
+                  if (!k1 && !k2) { window.dispatchEvent(new CustomEvent('open-settings')); return }
+                  window.dispatchEvent(new CustomEvent('retry-analysis', { detail: { nodeId, imagePath: data.imagePath, reanalyze: true } }))
+                })
+              )
+            }}
+            disabled={data.isPending}
+            title="Reanalisar com IA"
+            className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 border whitespace-nowrap transition-all hover:brightness-125 disabled:opacity-50 disabled:cursor-default cursor-pointer ${badge.cls}`}
+          >
             <span className="text-[10px] leading-none">{badge.icon}</span>
             <span className="text-[10px] font-medium leading-none">{badge.label}</span>
-          </div>
+          </button>
         ) : <div />}
         <div className="flex items-center gap-1">
           {data.tags.length > 0 && (
@@ -403,6 +493,22 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
                 }`}
               >
                 + todas
+              </button>
+              <button
+                onClick={handleCopyTags}
+                title={copiedTags ? 'Copiado!' : 'Copiar todas as tags'}
+                className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-white/[0.07] transition-colors"
+              >
+                {copiedTags ? (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                    <path d="M20 6L9 17L4 12" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                ) : (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                    <rect x="3" y="3" width="13" height="16" rx="2.5" stroke="rgba(255,255,255,0.4)" strokeWidth="2"/>
+                    <rect x="8" y="7" width="13" height="16" rx="2.5" fill="#111111" stroke="rgba(255,255,255,0.4)" strokeWidth="2"/>
+                  </svg>
+                )}
               </button>
             </>
           )}
@@ -459,27 +565,15 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
           </div>
         </div>
       )}
-      {grouped.map(([cat, tags]) => (
-        <div key={cat} className="flex flex-col gap-1 items-start">
-          <span className="text-[9px] uppercase tracking-widest text-white/25 font-semibold leading-none">
-            {CAT_LABEL[cat] ?? cat}
+      {primaryGroups.map(renderGroup)}
+      {mixed && (
+        <div className="flex flex-col gap-1.5 pt-1.5 mt-0.5 border-t border-white/[0.08]">
+          <span className="inline-flex items-center gap-1 text-[9px] uppercase tracking-widest text-orange-300/60 font-semibold leading-none">
+            <span className="text-[10px]">✨</span><span>Analisado por IA</span>
           </span>
-          <div className="flex flex-wrap justify-start gap-1 w-full">
-            {tags.map(tag => {
-              const displayValue = translatedMap?.[tag.id] ?? tag.value
-              const active = promptTags.some(pt => pt.value === displayValue)
-              return (
-                <button key={tag.id}
-                  onClick={e => { e.stopPropagation(); toggleTag({ ...tag, value: displayValue }, nodeId) }}
-                  onContextMenu={e => { e.preventDefault(); e.stopPropagation(); window.dispatchEvent(new CustomEvent('save-to-my-presets', { detail: { value: displayValue } })) }}
-                  className={`rm-chip ${active ? 'is-active' : ''}`}
-                  title={active ? 'Remover do builder' : 'Adicionar ao builder'}
-                >{displayValue}</button>
-              )
-            })}
-          </div>
+          {aiGroups.map(renderGroup)}
         </div>
-      ))}
+      )}
     </div>
   )
 }
@@ -537,7 +631,7 @@ function MetadataNodeView({ data, selected }: { data: ImageNodeData; selected: b
             <div key={i} className="flex items-center gap-2">
               <span className="text-[9px] text-white/25 shrink-0">↪</span>
               <span className="text-[10px] text-orange-300/65 truncate flex-1">{lora.name}</span>
-              <span className="text-[9px] font-mono text-white/30 shrink-0">{lora.strengthModel.toFixed(1)}</span>
+              <span className="text-[9px] font-mono text-white/30 shrink-0">{(typeof lora.strengthModel === 'number' ? lora.strengthModel : 1).toFixed(1)}</span>
             </div>
           ))}
         </div>
@@ -549,7 +643,7 @@ function MetadataNodeView({ data, selected }: { data: ImageNodeData; selected: b
             p.sampler    && ['Sampler',   p.sampler],
             p.scheduler  && ['Scheduler', p.scheduler],
             p.steps    !== undefined && ['Steps',    String(p.steps)],
-            p.denoise  !== undefined && ['Denoise',  p.denoise.toFixed(2)],
+            typeof p.denoise === 'number' && ['Denoise',  p.denoise.toFixed(2)],
             (p.guidance !== undefined || p.cfg !== undefined) && ['Guidance', String(p.guidance ?? p.cfg)],
             p.width !== undefined && p.height !== undefined && ['Resolução', `${p.width} × ${p.height}`],
             p.seed !== undefined && ['Seed', String(p.seed)],
@@ -607,6 +701,12 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   // search query for tag filtering
   const [searchQuery, setSearchQuery] = useState('')
   const [starFilter, setStarFilter]   = useState(false)
+  // Ctrl+F search: ref do input (foco via atalho) + navegação entre matches + contador
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const matchesRef     = useRef<string[]>([])
+  const matchIdxRef    = useRef(-1)
+  const [searchTotal, setSearchTotal] = useState(0)
+  const [searchPos, setSearchPos]     = useState(0)
 
   const appRef        = useRef<Application | null>(null)
   const worldRef      = useRef<Container | null>(null)
@@ -1058,6 +1158,50 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     }
   }, [canvasId, addMetadataNode, updatePixiNodeData, addPixiNode, flashSave])
 
+  // ─ reanálise sob demanda (botão do selo) ────────────────────────────────────
+  // FORÇA análise de IA (ignora o cache) e MESCLA: mantém as tags de metadado
+  // embutido e substitui só as de IA (que ganham seu próprio selo no painel).
+  const reanalyzeWithAI = useCallback(async (imagePath: string, nodeId: string) => {
+    analysisTotalRef.current++
+    setAnalysisProgress({ done: analysisDoneRef.current, total: analysisTotalRef.current })
+    try {
+      const node = nodesRef.current.get(nodeId)
+      if (!node) return
+      let pathForAI = node.data.thumbnailPath
+      if (!pathForAI) {
+        try {
+          pathForAI = await window.api.createThumbnail(imagePath)
+          updateNodeData(nodeId, { thumbnailPath: pathForAI })
+          await window.api.updateNodeThumbnail(nodeId, pathForAI)
+        } catch { pathForAI = imagePath }
+      }
+      const appLang = useCanvasStore.getState().appLang
+      const aiResult = await window.api.analyzeWithAI(pathForAI, appLang, true) // force = ignora cache
+      const aiTags = parseDescriptionToTags(typeof aiResult === 'string' ? aiResult : '', 'ai')
+      if (aiTags.length === 0) { updatePixiNodeData(nodeId, { isPending: false, isError: true }); return }
+      // Mantém as tags NÃO-IA (metadado) e troca as antigas de IA pelas novas.
+      const existing = useCanvasStore.getState().nodes.find(n => n.id === nodeId)?.data.tags ?? []
+      const keptMeta = existing.some(t => t.source !== 'ai')
+      const merged = [...existing.filter(t => t.source !== 'ai'), ...aiTags]
+      // Imagem sem metadado embutido vira 'ai'; com metadado, mantém o selo original.
+      const src = node.data.metadataSource
+      const newSource: ImageNodeData['metadataSource'] = (src && src !== 'none') ? src : 'ai'
+      const tagLang: 'en' | 'pt' = keptMeta ? (node.data.tagLang ?? 'en') : appLang
+      updatePixiNodeData(nodeId, { tags: merged, tagLang, metadataSource: newSource, isPending: false, isError: false })
+      await window.api.updateNodeMetadata(nodeId, newSource, node.data.modelName)
+      await window.api.saveNodeTags(nodeId, merged.map(t => ({ id: t.id, category: t.category, value: t.value, source: t.source })), tagLang)
+      flashSave()
+    } catch (err) {
+      console.error('[PixiCanvas] reanalyzeWithAI:', err)
+      updatePixiNodeData(nodeId, { isPending: false, isError: true })
+    } finally {
+      analysisDoneRef.current++
+      const done = analysisDoneRef.current, total = analysisTotalRef.current
+      setAnalysisProgress(done >= total ? null : { done, total })
+      if (done >= total) { analysisTotalRef.current = 0; analysisDoneRef.current = 0 }
+    }
+  }, [updatePixiNodeData, updateNodeData, flashSave])
+
   // ─ addNodes ───────────────────────────────────────────────────────────────
 
   const addNodes = useCallback(async (filePaths: string[], screenPos?: { x: number; y: number }) => {
@@ -1170,6 +1314,59 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     else doFit()
   }, [])
 
+  // ─ Ctrl+F search: filtra por dim (alpha) e navega entre matches ─
+  const applySearch = useCallback((q: string) => {
+    setSearchQuery(q)
+    const raw = q.trim()
+    const query = searchNorm(raw) // sem acento/caixa
+    if (raw) setStarFilter(false) // busca tem precedência sobre o filtro de favoritos
+    const terms = expandSearchQuery(query) // + sinônimos PT↔EN (cachorro↔dog↔puppy…)
+    // Casa por início-de-palavra: "man" acha "man"/"manager", nunca dentro de "human".
+    const termRes = terms.map(t => new RegExp('\\b' + escapeRe(t)))
+    // comfyParams (model/sampler/lora) vive num metadataNode separado, ligado por linkedImageNodeId
+    const paramsByImage = new Map<string, ComfyParams>()
+    if (raw) {
+      for (const n of useCanvasStore.getState().nodes) {
+        if (n.type === 'metadataNode' && n.data.linkedImageNodeId && n.data.comfyParams) {
+          paramsByImage.set(n.data.linkedImageNodeId, n.data.comfyParams)
+        }
+      }
+    }
+    const matches: string[] = []
+    for (const node of nodesRef.current.values()) {
+      if (node.type !== 'imageNode' || !node.container) continue
+      if (!raw) { node.container.alpha = 1; continue }
+      const cp = paramsByImage.get(node.id)
+      const hay: string[] = node.data.tags.map(t => t.value)
+      if (node.data.modelName) hay.push(node.data.modelName)
+      if (node.data.imagePath) hay.push(node.data.imagePath.replace(/.*[/\\]/, ''))
+      if (cp) {
+        if (cp.model) hay.push(cp.model)
+        if (cp.sampler) hay.push(cp.sampler)
+        for (const l of cp.loras ?? []) hay.push(l.name)
+      }
+      const hit = hay.some(h => { const hn = searchNorm(h); return termRes.some(re => re.test(hn)) })
+      node.container.alpha = hit ? 1 : 0.15
+      if (hit) matches.push(node.id)
+    }
+    matchesRef.current = matches
+    matchIdxRef.current = -1
+    setSearchTotal(raw ? matches.length : 0)
+    setSearchPos(0)
+  }, [])
+
+  const goToMatch = useCallback((dir: number) => {
+    const ids = matchesRef.current
+    if (ids.length === 0) return
+    let idx = matchIdxRef.current + dir
+    if (idx < 0) idx = ids.length - 1
+    else if (idx >= ids.length) idx = 0
+    matchIdxRef.current = idx
+    setSearchPos(idx + 1)
+    selectOne(ids[idx])
+    fitView(0, true)
+  }, [selectOne, fitView])
+
   // ─ delete ─────────────────────────────────────────────────────────────────
 
   const deleteSelected = useCallback(() => {
@@ -1250,7 +1447,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     const tex  = new Texture({ source: src })
     const spr  = new Sprite(tex)
     spr.width  = newWidth; spr.height = newH
-    if (useCanvasStore.getState().sfwMode && isNsfwNode(state)) {
+    if (useCanvasStore.getState().sfwMode && (state.data.isPending || isNsfwNode(state))) {
       if (state.blurMask) {
         state.blurMask.clear()
         state.blurMask.roundRect(0, 0, newWidth, newH, 10).fill(0xffffff)
@@ -1476,16 +1673,20 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
   // Retry analysis on demand (placed after processImage + enqueueAI are initialized)
   useEffect(() => {
-    const handler = (e: CustomEvent<{ nodeId: string; imagePath: string }>) => {
-      const { nodeId, imagePath } = e.detail
+    const handler = (e: CustomEvent<{ nodeId: string; imagePath: string; reanalyze?: boolean }>) => {
+      const { nodeId, imagePath, reanalyze } = e.detail
       if (processingRef.current.has(nodeId)) return
       updatePixiNodeData(nodeId, { isPending: true, isError: false })
       processingRef.current.add(nodeId)
-      enqueueAI(() => processImage(imagePath, nodeId).finally(() => processingRef.current.delete(nodeId)))
+      // reanalyze (botão do selo) força IA + mescla; senão é o retry normal do erro.
+      const run = reanalyze
+        ? () => reanalyzeWithAI(imagePath, nodeId)
+        : () => processImage(imagePath, nodeId)
+      enqueueAI(() => run().finally(() => processingRef.current.delete(nodeId)))
     }
     window.addEventListener('retry-analysis', handler as EventListener)
     return () => window.removeEventListener('retry-analysis', handler as EventListener)
-  }, [processImage, enqueueAI, updatePixiNodeData])
+  }, [processImage, reanalyzeWithAI, enqueueAI, updatePixiNodeData])
 
   // ─ pixi init ──────────────────────────────────────────────────────────────
 
@@ -2349,6 +2550,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
     const onKey = (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey
+      // Ctrl+F — foca a barra de busca (suprime o "localizar" nativo do Chromium)
+      if (ctrl && e.key.toLowerCase() === 'f') { e.preventDefault(); searchInputRef.current?.focus(); searchInputRef.current?.select(); return }
       // Ctrl+S — save to existing file (or open dialog first time)
       if (ctrl && e.key.toLowerCase() === 's' && !e.shiftKey) { e.preventDefault(); saveCtrlS(); return }
       // Ctrl+Shift+S — always open dialog (Save As) — e.key is 'S' when Shift held
@@ -2847,33 +3050,27 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             <path d="M8 8l2.5 2.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
           </svg>
           <input
+            ref={searchInputRef}
             value={searchQuery}
-            onChange={e => {
-              const q = e.target.value
-              setSearchQuery(q)
-              // Dim nodes that don't match; restore all if empty
-              for (const node of nodesRef.current.values()) {
-                if (node.type !== 'imageNode' || !node.container) continue
-                if (!q) { node.container.alpha = 1; continue }
-                // Word-boundary match: "man" matches "man"/"manager" but not "woman"/"roman"
-              const re = new RegExp('\\b' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
-              const match = node.data.tags.some(t => re.test(t.value))
-                  || (node.data.modelName ? re.test(node.data.modelName) : false)
-                node.container.alpha = match ? 1 : 0.15
-              }
+            onChange={e => applySearch(e.target.value)}
+            onKeyDown={e => {
+              e.stopPropagation()
+              if (e.key === 'Enter')          { e.preventDefault(); goToMatch(e.shiftKey ? -1 : 1) }
+              else if (e.key === 'ArrowDown') { e.preventDefault(); goToMatch(1) }
+              else if (e.key === 'ArrowUp')   { e.preventDefault(); goToMatch(-1) }
+              else if (e.key === 'Escape')    { e.preventDefault(); applySearch(''); clearAllSelection(); searchInputRef.current?.blur() }
             }}
-            onKeyDown={e => e.stopPropagation()}
-            placeholder="Buscar por tags…"
+            placeholder="Buscar (Ctrl+F)…"
             className="bg-transparent outline-none text-[12px] text-white/60 placeholder-white/20 w-36"
           />
           {searchQuery && (
+            <span className="text-[10px] text-white/30 tabular-nums shrink-0">
+              {searchTotal === 0 ? 'nenhum' : (searchPos > 0 ? `${searchPos}/${searchTotal}` : `${searchTotal}`)}
+            </span>
+          )}
+          {searchQuery && (
             <button
-              onClick={() => {
-                setSearchQuery('')
-                for (const node of nodesRef.current.values()) {
-                  if (node.container) node.container.alpha = 1
-                }
-              }}
+              onClick={() => { applySearch(''); clearAllSelection() }}
               className="text-white/25 hover:text-white/60 transition-colors text-xs"
             >✕</button>
           )}

@@ -16,7 +16,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { usePromptStore, useCanvasStore, type PromptTag } from '../../store'
+import { usePromptStore, useCanvasStore, WEIGHT_STEP, type PromptTag } from '../../store'
 
 function MicButton({ onTranscript }: { onTranscript: (text: string) => void }) {
   const [state, setState] = useState<'idle' | 'recording' | 'transcribing' | 'error'>('idle')
@@ -24,6 +24,81 @@ function MicButton({ onTranscript }: { onTranscript: (text: string) => void }) {
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const rafRef = useRef<number | null>(null)
+
+  const stopVisualizer = () => {
+    if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
+    analyserRef.current = null
+    if (audioCtxRef.current) { audioCtxRef.current.close().catch(() => {}); audioCtxRef.current = null }
+  }
+
+  // Desenha uma waveform ao vivo (amplitude no tempo) a partir do stream do mic.
+  const startVisualizer = (stream: MediaStream) => {
+    try {
+      const AudioCtx = window.AudioContext
+        || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+      const audioCtx = new AudioCtx()
+      audioCtxRef.current = audioCtx
+      const source = audioCtx.createMediaStreamSource(stream)
+      const analyser = audioCtx.createAnalyser()
+      analyser.fftSize = 1024
+      analyser.smoothingTimeConstant = 0.6
+      source.connect(analyser)
+      analyserRef.current = analyser
+
+      const buffer = new Uint8Array(analyser.fftSize)
+      const BARS = 28
+
+      const draw = () => {
+        rafRef.current = requestAnimationFrame(draw)
+        const canvas = canvasRef.current
+        const a = analyserRef.current
+        if (!canvas || !a) return
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+
+        const dpr = window.devicePixelRatio || 1
+        const cssW = canvas.clientWidth, cssH = canvas.clientHeight
+        if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+          canvas.width = cssW * dpr
+          canvas.height = cssH * dpr
+        }
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        ctx.clearRect(0, 0, cssW, cssH)
+
+        a.getByteTimeDomainData(buffer)
+        const step = Math.floor(buffer.length / BARS)
+        const gap = cssW / BARS
+        const barW = Math.max(2, gap * 0.5)
+        for (let i = 0; i < BARS; i++) {
+          let peak = 0
+          for (let j = 0; j < step; j++) {
+            const v = Math.abs(buffer[i * step + j] - 128) / 128
+            if (v > peak) peak = v
+          }
+          const barH = Math.max(2, peak * cssH * 0.95)
+          const x = i * gap + (gap - barW) / 2
+          const y = (cssH - barH) / 2
+          ctx.fillStyle = `rgba(249, 115, 22, ${0.4 + peak * 0.6})`
+          ctx.beginPath()
+          ctx.roundRect(x, y, barW, barH, barW / 2)
+          ctx.fill()
+        }
+      }
+      draw()
+    } catch {
+      // visualização é best-effort; ignora falhas (não impede a gravação)
+    }
+  }
+
+  // Garante limpeza se o componente desmontar no meio de uma gravação.
+  useEffect(() => () => {
+    stopVisualizer()
+    streamRef.current?.getTracks().forEach(t => t.stop())
+  }, [])
 
   const showError = (msg: string) => {
     setErrorMsg(msg)
@@ -43,10 +118,12 @@ function MicButton({ onTranscript }: { onTranscript: (text: string) => void }) {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       streamRef.current = stream
       chunksRef.current = []
+      startVisualizer(stream)
 
       const recorder = new MediaRecorder(stream)
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
       recorder.onstop = async () => {
+        stopVisualizer()
         streamRef.current?.getTracks().forEach(t => t.stop())
         streamRef.current = null
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType })
@@ -111,6 +188,12 @@ function MicButton({ onTranscript }: { onTranscript: (text: string) => void }) {
           </svg>
         )}
       </button>
+      {state === 'recording' && (
+        <div className="absolute right-full mr-2 top-1/2 -translate-y-1/2 flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-black/85 border border-white/10 shadow-[0_12px_32px_rgba(0,0,0,0.6)] pointer-events-none backdrop-blur-md">
+          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+          <canvas ref={canvasRef} width={120} height={26} style={{ width: 120, height: 26 }} />
+        </div>
+      )}
       {state === 'error' && (
         <div className="absolute bottom-full mb-2 right-0 whitespace-nowrap px-2.5 py-1.5 rounded-lg text-[11px] text-red-400 bg-red-500/10 border border-red-500/20 pointer-events-none">
           {errorMsg}
@@ -159,8 +242,11 @@ function InsertZone({ index, activeIndex, onActivate, onCommit, onCancel }: {
   )
 }
 
-function SortableChip({ tag }: { tag: PromptTag }) {
-  const { removeTag, updateTagText } = usePromptStore()
+function SortableChip({ tag, zone }: { tag: PromptTag; zone: 'positive' | 'negative' }) {
+  const store = usePromptStore()
+  const removeTag = zone === 'negative' ? store.removeNegativeTag : store.removeTag
+  const updateTagText = zone === 'negative' ? store.updateNegativeTagText : store.updateTagText
+  const setTagWeight = store.setTagWeight
   const {
     attributes, listeners, setNodeRef,
     transform, transition, isDragging,
@@ -181,13 +267,18 @@ function SortableChip({ tag }: { tag: PromptTag }) {
     setEditing(false)
   }
 
+  const weight = tag.weight ?? 1
+  const showWeight = Math.abs(weight - 1) > 0.001
+  const wStr = String(Math.round(weight * 10) / 10)
+  const bump = (d: number) => setTagWeight(tag.id, weight + d)
+
   return (
     <div
       ref={setNodeRef}
       data-chip
       style={style}
       onContextMenu={e => { e.preventDefault(); e.stopPropagation(); window.dispatchEvent(new CustomEvent('save-to-my-presets', { detail: { value: tag.value } })) }}
-      className={`rm-builder-chip group ${isDragging ? 'opacity-45 shadow-xl' : ''}`}
+      className={`rm-builder-chip group ${zone === 'negative' ? 'is-negative' : ''} ${isDragging ? 'opacity-45 shadow-xl' : ''}`}
       {...attributes}
       {...listeners}
     >
@@ -208,7 +299,7 @@ function SortableChip({ tag }: { tag: PromptTag }) {
         />
       ) : (
         <span
-          className="text-[12px] leading-none px-2.5 py-1.5"
+          className="text-[12px] leading-none pl-2.5 py-1.5"
           onClick={e => {
             e.stopPropagation()
             setEditValue(tag.value)
@@ -219,13 +310,87 @@ function SortableChip({ tag }: { tag: PromptTag }) {
           {tag.value}
         </span>
       )}
-      <button
-        className="pr-2 text-current opacity-0 group-hover:opacity-40 hover:!opacity-90 transition-opacity text-base leading-none shrink-0 -ml-0.5"
-        onClick={e => { e.stopPropagation(); removeTag(tag.id) }}
-        onPointerDown={e => e.stopPropagation()}
-      >
-        ×
-      </button>
+      <div className="flex items-center gap-1 pl-1.5 pr-1.5 shrink-0">
+        {showWeight && <span className="rm-weight-badge" title="Peso">{wStr}</span>}
+        <div className="rm-weight-stepper flex flex-col opacity-0 group-hover:opacity-80 transition-opacity">
+          <button
+            title="Aumentar peso"
+            onClick={e => { e.stopPropagation(); bump(WEIGHT_STEP) }}
+            onPointerDown={e => e.stopPropagation()}
+          >
+            <svg width="8" height="5" viewBox="0 0 8 5" fill="none"><path d="M1 4L4 1L7 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </button>
+          <button
+            title="Diminuir peso"
+            onClick={e => { e.stopPropagation(); bump(-WEIGHT_STEP) }}
+            onPointerDown={e => e.stopPropagation()}
+          >
+            <svg width="8" height="5" viewBox="0 0 8 5" fill="none"><path d="M1 1L4 4L7 1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </button>
+        </div>
+        <button
+          className="text-current opacity-0 group-hover:opacity-40 hover:!opacity-90 transition-opacity text-base leading-none -ml-0.5"
+          onClick={e => { e.stopPropagation(); removeTag(tag.id) }}
+          onPointerDown={e => e.stopPropagation()}
+        >
+          ×
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// Zona de chips reutilizável (positiva e negativa). É um droppable dnd-kit,
+// então aceita chips arrastados da outra zona; o InsertZone final permite digitar.
+function ChipZone({
+  zone, tags, activeInsert, setActiveInsert, onInsert, emptyHint,
+}: {
+  zone: 'positive' | 'negative'
+  tags: PromptTag[]
+  activeInsert: number | null
+  setActiveInsert: (i: number | null) => void
+  onInsert: (value: string, index: number) => void
+  emptyHint?: string
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `zone-${zone}` })
+  return (
+    <div
+      ref={setNodeRef}
+      className={`flex flex-wrap items-start gap-1.5 pb-2 max-h-[90px] overflow-y-auto overflow-x-hidden cursor-text ${
+        zone === 'negative' ? 'rounded-lg transition-colors' : ''
+      } ${isOver && zone === 'negative' ? 'bg-red-500/[0.06]' : ''}`}
+      style={emptyHint && tags.length === 0 ? { minHeight: 32 } : undefined}
+      onMouseDown={e => {
+        const target = e.target as Element
+        if (target.closest('[data-chip]') || target.closest('[data-insert-zone]')) return
+        e.preventDefault()
+        setActiveInsert(tags.length)
+      }}
+    >
+      <SortableContext items={tags.map(t => t.id)} strategy={rectSortingStrategy}>
+        {tags.map((tag, i) => (
+          <Fragment key={tag.id}>
+            <InsertZone
+              index={i}
+              activeIndex={activeInsert}
+              onActivate={setActiveInsert}
+              onCommit={v => { onInsert(v, i); setActiveInsert(null) }}
+              onCancel={() => setActiveInsert(null)}
+            />
+            <SortableChip tag={tag} zone={zone} />
+          </Fragment>
+        ))}
+      </SortableContext>
+      <InsertZone
+        index={tags.length}
+        activeIndex={activeInsert}
+        onActivate={setActiveInsert}
+        onCommit={v => { onInsert(v, tags.length); setActiveInsert(null) }}
+        onCancel={() => setActiveInsert(null)}
+      />
+      {tags.length === 0 && emptyHint && activeInsert === null && (
+        <span className="text-[11px] text-white/20 self-center pointer-events-none pl-1">{emptyHint}</span>
+      )}
     </div>
   )
 }
@@ -403,10 +568,13 @@ const MODEL_GROUPS = [
   {
     group: 'Imagem',
     models: [
+      { id: 'boogu',              label: 'Boogu' },
       { id: 'flux',               label: 'Flux',            nsfw: true },
       { id: 'flux2-klein',        label: 'Flux 2 [klein]',  nsfw: true },
       { id: 'gpt-image-2',        label: 'GPT Image 2' },
       { id: 'grok',               label: 'Grok' },
+      { id: 'hidream',            label: 'HiDream',         nsfw: true },
+      { id: 'krea-2',             label: 'Krea 2' },
       { id: 'midjourney',         label: 'Midjourney' },
       { id: 'nano-banana',        label: 'Nano Banana' },
       { id: 'qwen-image-2512',    label: 'Qwen Image 2512', nsfw: true },
@@ -440,7 +608,13 @@ const modelLabel = (id?: string) => id ? (MODELS.find(m => m.id === id)?.label ?
 type HistoryEntry = { text: string; model?: string }
 
 export default function PromptBuilder() {
-  const { promptTags, reorderTags, clearAll, getPromptString, insertTagAt, removeTag, updateTagText } = usePromptStore()
+  const {
+    promptTags, reorderTags, clearAll, getPromptString, insertTagAt, removeTag, updateTagText,
+    negativeTags, getNegativeString, insertNegativeAt, reorderNegativeTags, removeNegativeTag,
+    updateNegativeTagText, setNegativeFromString, moveToNegative, moveToPositive, clearNegative,
+  } = usePromptStore()
+  const [negInsertIndex, setNegInsertIndex] = useState<number | null>(null)
+  const [showNegative, setShowNegative] = useState(false)
   const dragPointerRef = useRef({ x: 0, y: 0 })
   const dragCleanupRef = useRef<(() => void) | null>(null)
   const [insertIndex, setInsertIndex] = useState<number | null>(null)
@@ -496,7 +670,7 @@ export default function PromptBuilder() {
   const [optimizeError, setOptimizeError] = useState<string | null>(null)
   const [translatingPrompt, setTranslatingPrompt] = useState(false)
   const [promptTranslated, setPromptTranslated] = useState(false)
-  const preTranslateRef = useRef<{ tags: { id: string; value: string }[]; input: string } | null>(null)
+  const preTranslateRef = useRef<{ tags: { id: string; value: string }[]; negTags: { id: string; value: string }[]; input: string } | null>(null)
   const [dropdownPos, setDropdownPos] = useState({ x: 0, y: 0 })
   const modelRef = useRef<HTMLDivElement>(null)
   const modelBtnRef = useRef<HTMLButtonElement>(null)
@@ -550,9 +724,13 @@ export default function PromptBuilder() {
 
     const { active, over } = event
     if (!over) return
+    const activeId = String(active.id)
+    const overId = String(over.id)
+    const inPos = promptTags.some(t => t.id === activeId)
 
-    if (over.id === 'textarea-drop') {
-      const tag = promptTags.find(t => t.id === active.id)
+    // Soltar no textarea positivo → o chip vira texto livre
+    if (overId === 'textarea-drop') {
+      const tag = (inPos ? promptTags : negativeTags).find(t => t.id === activeId)
       if (!tag || !textInputRef.current) return
       const { x, y } = dragPointerRef.current
       const pos = getCaretIndexInTextarea(textInputRef.current, x, y)
@@ -561,19 +739,43 @@ export default function PromptBuilder() {
       const sep1 = before && !before.match(/[,\s]$/) ? ', ' : ''
       const sep2 = after && !after.match(/^[,\s]/) ? ', ' : ''
       setInputText(before + sep1 + tag.value + sep2 + after)
-      removeTag(tag.id)
+      if (inPos) removeTag(activeId); else removeNegativeTag(activeId)
       return
     }
 
-    if (active.id === over.id) return
-    const from = promptTags.findIndex(t => t.id === active.id)
-    const to = promptTags.findIndex(t => t.id === over.id)
-    reorderTags(from, to)
+    const overInNeg = overId === 'zone-negative' || negativeTags.some(t => t.id === overId)
+    const overInPos = overId === 'zone-positive' || promptTags.some(t => t.id === overId)
+
+    // Mover entre zonas (preserva o peso)
+    if (inPos && overInNeg) {
+      const idx = negativeTags.findIndex(t => t.id === overId)
+      moveToNegative(activeId, idx >= 0 ? idx : undefined)
+      return
+    }
+    if (!inPos && overInPos) {
+      const idx = promptTags.findIndex(t => t.id === overId)
+      moveToPositive(activeId, idx >= 0 ? idx : undefined)
+      return
+    }
+
+    // Reordenar dentro da mesma zona
+    if (activeId === overId) return
+    if (inPos) {
+      const from = promptTags.findIndex(t => t.id === activeId)
+      const to = promptTags.findIndex(t => t.id === overId)
+      if (from >= 0 && to >= 0) reorderTags(from, to)
+    } else {
+      const from = negativeTags.findIndex(t => t.id === activeId)
+      const to = negativeTags.findIndex(t => t.id === overId)
+      if (from >= 0 && to >= 0) reorderNegativeTags(from, to)
+    }
   }
 
   const handleCopy = () => {
-    const parts = [getPromptString(), inputText.trim()].filter(Boolean)
-    const text = parts.join(', ')
+    const pos = [getPromptString(), inputText.trim()].filter(Boolean).join(', ')
+    const neg = getNegativeString().trim()
+    // Convenção A1111/Forge: negativo em linha própria (ComfyUI ignora, sem quebrar).
+    const text = neg ? (pos ? `${pos}\nNegative prompt: ${neg}` : `Negative prompt: ${neg}`) : pos
     if (!text) return
     navigator.clipboard.writeText(text)
     setCopied(true)
@@ -588,6 +790,8 @@ export default function PromptBuilder() {
 
   const handleClearAll = () => {
     clearAll()
+    clearNegative()
+    setShowNegative(false)
     setInputText('')
     setPromptTranslated(false)
     preTranslateRef.current = null
@@ -601,6 +805,7 @@ export default function PromptBuilder() {
       const orig = preTranslateRef.current
       if (orig) {
         orig.tags.forEach(t => updateTagText(t.id, t.value))
+        orig.negTags.forEach(t => updateNegativeTagText(t.id, t.value))
         setInputText(orig.input)
       }
       setPromptTranslated(false)
@@ -611,6 +816,8 @@ export default function PromptBuilder() {
     const inputTrim = inputText.trim()
     const values = promptTags.map(t => t.value)
     if (inputTrim) values.push(inputTrim)
+    const negStart = values.length
+    negativeTags.forEach(t => values.push(t.value))
     if (values.length === 0) return
 
     setTranslatingPrompt(true)
@@ -619,6 +826,7 @@ export default function PromptBuilder() {
       // Guarda originais para conseguir voltar ao inglês.
       preTranslateRef.current = {
         tags: promptTags.map(t => ({ id: t.id, value: t.value })),
+        negTags: negativeTags.map(t => ({ id: t.id, value: t.value })),
         input: inputText,
       }
       promptTags.forEach((t, i) => { if (translated[i]) updateTagText(t.id, translated[i]) })
@@ -626,6 +834,7 @@ export default function PromptBuilder() {
         const ti = translated[promptTags.length]
         if (ti) setInputText(ti)
       }
+      negativeTags.forEach((t, j) => { if (translated[negStart + j]) updateNegativeTagText(t.id, translated[negStart + j]) })
       setPromptTranslated(true)
     } catch (err) {
       console.error('[translate-prompt]', err)
@@ -651,9 +860,15 @@ export default function PromptBuilder() {
     setOptimizeError(null)
     try {
       const optimized = await window.api.optimizePrompt(currentPrompt, modelId)
-      const text = optimized.split('\n').map((l: string) => l.trim()).filter((l: string) => l && l !== '---NEGATIVE---').join('\n')
+      const [positive, negative] = optimized.split('---NEGATIVE---')
+      const text = positive.split('\n').map((l: string) => l.trim()).filter(Boolean).join('\n')
       clearAll()
       setInputText(text)
+      // Modelos como SD/Wan retornam um negative prompt — antes descartado. Captura na zona negativa.
+      if (negative?.trim()) {
+        setNegativeFromString(negative)
+        setShowNegative(true)
+      }
       setTargetModel(null)
       setPromptTranslated(false)
       preTranslateRef.current = null
@@ -682,7 +897,9 @@ export default function PromptBuilder() {
   handleSelectModelRef.current = handleSelectModel
 
   const count = promptTags.length
-  const hasContent = count > 0 || inputText.trim().length > 0
+  const negCount = negativeTags.length
+  const negVisible = showNegative || negCount > 0
+  const hasContent = count > 0 || inputText.trim().length > 0 || negCount > 0
 
   return (
     <div
@@ -697,41 +914,15 @@ export default function PromptBuilder() {
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
           >
-            {/* Chips */}
+            {/* Chips positivos */}
             {count > 0 && (
-              <div
-                className="flex flex-wrap items-start gap-1.5 pb-2 max-h-[90px] overflow-y-auto overflow-x-hidden cursor-text"
-                onMouseDown={e => {
-                  // If clicked on empty space (not on a chip or insert zone), insert at end
-                  const target = e.target as Element
-                  if (target.closest('[data-chip]') || target.closest('[data-insert-zone]')) return
-                  e.preventDefault()
-                  setInsertIndex(promptTags.length)
-                }}
-              >
-                <SortableContext items={promptTags.map(t => t.id)} strategy={rectSortingStrategy}>
-                  {promptTags.map((tag, i) => (
-                    <Fragment key={tag.id}>
-                      <InsertZone
-                        index={i}
-                        activeIndex={insertIndex}
-                        onActivate={setInsertIndex}
-                        onCommit={v => { insertTagAt(v, i); setInsertIndex(null) }}
-                        onCancel={() => setInsertIndex(null)}
-                      />
-                      <SortableChip tag={tag} />
-                    </Fragment>
-                  ))}
-                </SortableContext>
-                {/* Insert zone at end */}
-                <InsertZone
-                  index={promptTags.length}
-                  activeIndex={insertIndex}
-                  onActivate={setInsertIndex}
-                  onCommit={v => { insertTagAt(v, promptTags.length); setInsertIndex(null) }}
-                  onCancel={() => setInsertIndex(null)}
-                />
-              </div>
+              <ChipZone
+                zone="positive"
+                tags={promptTags}
+                activeInsert={insertIndex}
+                setActiveInsert={setInsertIndex}
+                onInsert={(v, i) => insertTagAt(v, i)}
+              />
             )}
 
             {/* Textarea — hidden when there are tags and no text */}
@@ -743,6 +934,33 @@ export default function PromptBuilder() {
                 onKeyDown={e => e.stopPropagation()}
                 placeholder="Escrever prompt..."
               />
+            )}
+
+            {/* Zona negativa */}
+            {negVisible && (
+              <div className="mt-1.5 pt-2 border-t border-white/[0.06]">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="flex items-center gap-1.5 text-[9px] uppercase tracking-widest font-semibold text-red-400/60">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-500/60" /> Negativo
+                  </span>
+                  {negCount > 0 && (
+                    <button
+                      onClick={clearNegative}
+                      className="text-[10px] text-white/25 hover:text-white/60 transition-colors px-1.5 py-0.5 rounded"
+                    >
+                      Limpar
+                    </button>
+                  )}
+                </div>
+                <ChipZone
+                  zone="negative"
+                  tags={negativeTags}
+                  activeInsert={negInsertIndex}
+                  setActiveInsert={setNegInsertIndex}
+                  onInsert={(v, i) => insertNegativeAt(v, i)}
+                  emptyHint="Arraste tags aqui ou clique para adicionar…"
+                />
+              </div>
             )}
           </DndContext>
 
@@ -823,6 +1041,17 @@ export default function PromptBuilder() {
             </div>
 
             <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowNegative(v => !v)}
+              title="Prompt negativo"
+              className={`text-[11px] px-2 py-0.5 rounded-md transition-colors shrink-0 ${
+                negVisible
+                  ? 'text-red-300/80 bg-red-500/[0.12] hover:bg-red-500/[0.18]'
+                  : 'text-white/30 hover:text-white/65 hover:bg-white/[0.06]'
+              }`}
+            >
+              Negativo
+            </button>
             {hasOpenAIKey && <MicButton onTranscript={text => setInputText(prev => prev ? prev + ' ' + text : text)} />}
             {hasContent && (
               <button

@@ -23,7 +23,7 @@ const api = {
 
   // Metadata
   extractMetadata: (imagePath: string) => ipcRenderer.invoke('image:extractMetadata', imagePath),
-  analyzeWithAI: (imagePath: string, lang?: 'en' | 'pt') => ipcRenderer.invoke('image:analyzeWithAI', imagePath, lang),
+  analyzeWithAI: (imagePath: string, lang?: 'en' | 'pt', force?: boolean) => ipcRenderer.invoke('image:analyzeWithAI', imagePath, lang, force),
   createThumbnail: (imagePath: string): Promise<string> => ipcRenderer.invoke('image:createThumbnail', imagePath),
   readClipboardImage: (): Promise<string | null> => ipcRenderer.invoke('clipboard:readImage'),
 

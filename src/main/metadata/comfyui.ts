@@ -63,7 +63,7 @@ export function parseComfyUI(raw: Record<string, unknown>): ExtractionResult {
     steps = ksampler.inputs.steps as number
     sampler = ksampler.inputs.sampler_name as string
     cfg   = ksampler.inputs.cfg as number
-    if (ksampler.inputs.denoise !== undefined) denoise = ksampler.inputs.denoise as number
+    if (typeof ksampler.inputs.denoise === 'number') denoise = ksampler.inputs.denoise
 
     const posRef = ksampler.inputs.positive
     if (Array.isArray(posRef)) {
@@ -100,13 +100,13 @@ export function parseComfyUI(raw: Record<string, unknown>): ExtractionResult {
     // LoRA loaders (standard + Power Lora Loader + StyleModelLoader used as LoRA)
     if (ct === 'LoraLoader' || ct === 'LoraLoaderModelOnly' || ct === 'LoraLoaderBlockWeight') {
       const name = node.inputs?.lora_name as string
-      if (name) loras.push({ name: stripPath(name), strengthModel: (node.inputs?.strength_model as number) ?? 1 })
+      if (name) loras.push({ name: stripPath(name), strengthModel: typeof node.inputs?.strength_model === 'number' ? node.inputs.strength_model : 1 })
     }
     // Power Lora Loader (multiple loras in one node)
     if (ct === 'Power Lora Loader (rgthree)') {
       for (let i = 1; i <= 10; i++) {
         const name = node.inputs?.[`lora_${i}`] as string
-        if (name && MODEL_EXTS.test(name)) loras.push({ name: stripPath(name), strengthModel: (node.inputs?.[`strength_${i}`] as number) ?? 1 })
+        if (name && MODEL_EXTS.test(name)) { const s = node.inputs?.[`strength_${i}`]; loras.push({ name: stripPath(name), strengthModel: typeof s === 'number' ? s : 1 }) }
       }
     }
 
@@ -114,7 +114,7 @@ export function parseComfyUI(raw: Record<string, unknown>): ExtractionResult {
     if (ct === 'BasicScheduler' || ct === 'KarrasScheduler' || ct === 'ExponentialScheduler' ||
         ct === 'PolyexponentialScheduler' || ct === 'VPScheduler') {
       scheduler = node.inputs?.scheduler as string
-      if (node.inputs?.denoise !== undefined) denoise = node.inputs.denoise as number
+      if (typeof node.inputs?.denoise === 'number') denoise = node.inputs.denoise
       if (node.inputs?.steps !== undefined && steps === undefined) steps = node.inputs.steps as number
     }
 

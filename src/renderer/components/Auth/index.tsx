@@ -54,14 +54,11 @@ export default function Auth() {
     setLoading(true)
     setError(null)
 
-    const { data, error: dbError } = await supabase
-      .from('licenses')
-      .select('email')
-      .eq('email', email.toLowerCase().trim())
-      .maybeSingle()
+    const { data: licensed, error: dbError } = await supabase
+      .rpc('check_license', { p_email: email.toLowerCase().trim() })
 
     if (dbError) { setError('Erro ao verificar e-mail. Tente novamente.'); setLoading(false); return }
-    if (!data) { setError('E-mail não encontrado. Adquira o Ref Map para ter acesso.'); setLoading(false); return }
+    if (!licensed) { setError('E-mail não encontrado. Adquira o Ref Map para ter acesso.'); setLoading(false); return }
 
     const { error: otpError } = await supabase.auth.signInWithOtp({ email: email.toLowerCase().trim() })
 
@@ -224,7 +221,7 @@ export default function Auth() {
                 type="text"
                 placeholder="000000"
                 value={otp}
-                onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 required
                 autoFocus
                 inputMode="numeric"
@@ -237,7 +234,7 @@ export default function Auth() {
               )}
               <button
                 type="submit"
-                disabled={loading || otp.length < 8}
+                disabled={loading || otp.length !== 6}
                 className="w-full py-3 rounded-xl text-[13px] font-medium text-white transition-opacity"
                 style={{ background: 'linear-gradient(135deg, #8f0e2e, #F97316)', opacity: (loading || otp.length < 6) ? 0.5 : 1 }}
               >

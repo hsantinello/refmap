@@ -10,7 +10,7 @@ import About from './components/About'
 import Auth from './components/Auth'
 import UpdateBanner from './components/UpdateBanner'
 import { useCanvasStore, usePromptStore } from './store'
-import { supabase } from './lib/supabase'
+import { supabase, isLicenseActive } from './lib/supabase'
 
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined)
@@ -33,6 +33,32 @@ export default function App() {
     })
     return () => subscription.unsubscribe()
   }, [])
+
+  // Revalida a licença: se o e-mail do usuário sair da tabela `licenses`, desloga.
+  // Fail-open: só desloga quando a resposta é AUTORITATIVA (licença removida = false).
+  // Erro de rede / servidor indisponível (null) NÃO desloga — evita expulsar quem
+  // está offline. Revalida ao abrir, ao focar a janela e a cada 5 min.
+  useEffect(() => {
+    const email = session?.user?.email
+    if (!email) return
+
+    let cancelled = false
+    const validate = async () => {
+      const active = await isLicenseActive(email)
+      if (!cancelled && active === false) await supabase.auth.signOut()
+    }
+
+    validate()
+    const interval = setInterval(validate, 5 * 60 * 1000)
+    const onFocus = () => validate()
+    window.addEventListener('focus', onFocus)
+
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [session])
 
   // Open settings from anywhere via custom event
   useEffect(() => {

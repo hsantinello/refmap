@@ -9,7 +9,7 @@ import { canvasQueries, nodeQueries, tagQueries, settingQueries, aiCacheQueries 
 import { extractMetadata } from '../metadata'
 import { analyzeWithAnthropic } from '../ai/anthropic'
 import { analyzeWithOpenAI } from '../ai/openai'
-import { MODEL_PROMPT_CONFIGS } from '../ai/model-prompts'
+import { MODEL_PROMPT_CONFIGS, IMAGE_MODEL_IDS } from '../ai/model-prompts'
 
 export function registerHandlers(win: BrowserWindow): void {
   // ── Window controls ────────────────────────────────────────────────────
@@ -67,60 +67,125 @@ export function registerHandlers(win: BrowserWindow): void {
   })
 
   // ── AI analysis ───────────────────────────────────────────────────────
-  ipcMain.handle('image:analyzeWithAI', async (_e, imagePath: string, lang: 'en' | 'pt' = 'en') => {
+  ipcMain.handle('image:analyzeWithAI', async (_e, imagePath: string, lang: 'en' | 'pt' = 'en', force = false) => {
     // Cache por idioma: análise em PT e em EN são entradas separadas.
     const cacheKey = lang === 'pt' ? `${imagePath}::pt` : imagePath
-    const cached = aiCacheQueries.get(cacheKey)
+    // force = true (botão "Reanalisar com IA") pula a leitura do cache e refaz de verdade.
+    const cached = force ? null : aiCacheQueries.get(cacheKey)
     if (cached && typeof cached === 'string' && /\{[^}]+\}/.test(cached)) return cached
 
     const provider = settingQueries.get('aiProvider') || 'anthropic'
 
-    const encryptedActive = settingQueries.get(`apiKey_${provider}`)
     const encryptedAnthropic = settingQueries.get('apiKey_anthropic')
     const encryptedOpenAI = settingQueries.get('apiKey_openai')
 
-    // Resolve which key to use for vision — Together AI has no serverless vision models,
-    // so fall back to Anthropic or OpenAI for image analysis
-    const encryptedKey = encryptedActive || encryptedAnthropic || encryptedOpenAI
-    if (!encryptedKey) throw new Error('API key not configured')
+    const decryptKey = (enc: unknown): string => {
+      if (!enc || typeof enc !== 'string') return ''
+      try { return safeStorage.decryptString(Buffer.from(enc, 'hex')).trim() } catch { return '' }
+    }
 
-    const apiKey = safeStorage.decryptString(Buffer.from(encryptedKey, 'hex'))
+    // Resolve which key to use for vision. Prefer the active provider's key;
+    // only fall back to another provider's key when the active one is missing
+    // or blank. A blank/revoked key must NOT silently route to OpenAI — it
+    // yields a clean "not configured" error instead of a raw 401.
+    // Rastreia o provider da chave EFETIVAMENTE resolvida: se a chave do
+    // provider ativo falta, cai para outra chave — mas o dispatch abaixo tem
+    // que rotear para o SDK dessa chave, senão manda sk- da OpenAI ao endpoint
+    // Anthropic (401).
+    let effectiveProvider = provider
+    let apiKey = decryptKey(settingQueries.get(`apiKey_${provider}`))
+    if (!apiKey) {
+      const aKey = decryptKey(encryptedAnthropic)
+      const oKey = decryptKey(encryptedOpenAI)
+      if (aKey) { apiKey = aKey; effectiveProvider = 'anthropic' }
+      else if (oKey) { apiKey = oKey; effectiveProvider = 'openai' }
+    }
+    if (!apiKey) throw new Error('API key not configured')
+
     const isTogetherKey = apiKey.startsWith('tgp_')
 
     let tags: string
     if (isTogetherKey) {
-      // Try Together AI vision models in order until one works
+      // Try Together AI vision models in order until one works. These are the
+      // multimodal models that are actually SERVERLESS on Together — verified by
+      // sending a real image to /v1/chat/completions. Counterintuitively, the
+      // "*-VL" and Llama-4/3.2-Vision models are dedicated-only (they return a
+      // 400 "non-serverless model" error), while these smaller multimodal chat
+      // models work serverless. gemma-3n gives the richest descriptions.
       const togetherVisionModels = [
         'google/gemma-3n-E4B-it',
-        'meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo',
+        'MiniMaxAI/MiniMax-M3',
       ]
       tags = ''
+      let lastErr: unknown = null
+      // Only genuine transient errors are worth retrying. The 400 "Unable to
+      // access non-serverless model" is PERMANENT for the account (the model
+      // isn't available serverless at all), so we must NOT retry it — doing so
+      // just wastes ~30s/image before falling back. Fail it fast to the next
+      // model / to the Anthropic|OpenAI fallback below.
+      const isRetryable = (err: unknown): boolean => {
+        const status = (err as { status?: number })?.status
+        const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase()
+        return status === 429 || status === 500 || status === 502 || status === 503 ||
+          msg.includes('rate limit') || msg.includes('overloaded')
+      }
+      const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
       for (const model of togetherVisionModels) {
-        try {
-          tags = await analyzeWithOpenAI(imagePath, apiKey, {
-            baseURL: 'https://api.together.xyz/v1',
-            model,
-            lang,
-          })
-          if (tags) break
-        } catch { /* try next */ }
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            tags = await analyzeWithOpenAI(imagePath, apiKey, {
+              baseURL: 'https://api.together.xyz/v1',
+              model,
+              lang,
+            })
+            break
+          } catch (err) {
+            lastErr = err
+            console.warn(`[analyzeWithAI] Together vision "${model}" attempt ${attempt + 1}/3 failed:`, err instanceof Error ? err.message : err)
+            // Non-retryable (e.g. 401) or out of attempts → move to next model
+            if (!isRetryable(err) || attempt === 2) break
+            await delay(1500 * (attempt + 1)) // 1.5s, then 3s backoff
+          }
+        }
+        if (tags) break
       }
-      // Together AI vision failed — fall back to Anthropic or OpenAI if available
+      // Together vision unavailable — fall back to a REAL Anthropic/OpenAI key
+      // if one is configured. Guard against empty/blank stored keys, which
+      // otherwise crash the SDK with a cryptic "Could not resolve authentication".
       if (!tags) {
-        const fallbackEncrypted = encryptedAnthropic || encryptedOpenAI
-        if (!fallbackEncrypted) throw new Error('Nenhum modelo de visão disponível. Configure uma chave OpenAI ou Anthropic.')
-        const fallbackKey = safeStorage.decryptString(Buffer.from(fallbackEncrypted, 'hex'))
-        tags = encryptedAnthropic
-          ? await analyzeWithAnthropic(imagePath, fallbackKey, lang)
-          : await analyzeWithOpenAI(imagePath, fallbackKey, { lang })
+        const decryptIfPresent = (enc: unknown): string => {
+          if (!enc || typeof enc !== 'string') return ''
+          try { return safeStorage.decryptString(Buffer.from(enc, 'hex')).trim() } catch { return '' }
+        }
+        const anthropicKey = decryptIfPresent(encryptedAnthropic)
+        const openaiKey = decryptIfPresent(encryptedOpenAI)
+        if (anthropicKey) {
+          tags = await analyzeWithAnthropic(imagePath, anthropicKey, lang)
+        } else if (openaiKey) {
+          tags = await analyzeWithOpenAI(imagePath, openaiKey, { lang })
+        } else {
+          // Together vision models all failed and there's no OpenAI/Anthropic
+          // fallback key. Propagate the real error so it's diagnosable.
+          const detail = lastErr instanceof Error ? lastErr.message : String(lastErr ?? 'unknown error')
+          console.warn(`[analyzeWithAI] Together vision failed and no fallback key configured. Last error: ${detail}`)
+          throw new Error(`Together AI vision failed: ${detail}`)
+        }
       }
-    } else if (provider === 'anthropic') {
+    } else if (effectiveProvider === 'anthropic') {
       tags = await analyzeWithAnthropic(imagePath, apiKey, lang)
     } else {
       tags = await analyzeWithOpenAI(imagePath, apiKey, { lang })
     }
 
-    aiCacheQueries.set(cacheKey, tags)
+    // Só cacheia saída bem-formada; uma resposta truncada/lixo (ex.: stream do
+    // Together que travou contendo qualquer "{x}") não pode ser cacheada e
+    // servida para sempre. O read gate acima permanece permissivo de propósito,
+    // para não re-analisar em loop um truncamento determinístico.
+    const isWellFormedTags = (s: string): boolean =>
+      s.trimStart().startsWith('{') &&
+      /\}/.test(s) &&
+      (s.match(/\[[^\]]+\]/g)?.length ?? 0) >= 5
+    if (isWellFormedTags(tags)) aiCacheQueries.set(cacheKey, tags)
     return tags
   })
 
@@ -170,13 +235,23 @@ export function registerHandlers(win: BrowserWindow): void {
       return result
     }
 
-    const userMsg = `Optimize this prompt for ${config.label}. Return the result in English only, regardless of the input language. Return ONLY the prompt, no introduction, no explanation:\n\n${prompt}`
+    const realismDefault = IMAGE_MODEL_IDS.has(modelId)
+      ? `\n\nDEFAULT STYLE: if the user did NOT specify an artistic style, medium or aesthetic, make the image photorealistic — realistic photography, natural lighting, true-to-life detail and texture. Only use a non-realistic style (illustration, anime, painting, 3D render, graphic, etc.) when the user explicitly asked for it.`
+      : ''
+
+    const userMsg = `Optimize this prompt for ${config.label}. Write the descriptive prompt in English only, regardless of the input language — EXCEPT for literal spoken lines and text-to-render, which follow the VERBATIM rule below.
+
+VERBATIM TEXT — HIGHEST PRIORITY: If the user gives words that a person/character/subject SPEAKS or SAYS (dialogue, voice-over, narration), or literal TEXT TO BE DISPLAYED in the image/video (speech bubble, sign, caption, title, subtitle, label, on-screen text), reproduce that text EXACTLY word-for-word, wrapped in double quotes, in the SAME language the user wrote it. Never translate it, paraphrase it, summarize it, rephrase it, correct it, shorten it or drop it. Only the surrounding description gets translated to English; the quoted spoken/displayed text must stay intact exactly as written.
+
+IMPORTANT — STAY FAITHFUL TO WHAT THE USER WROTE: Keep ALL of the user's meaningful content — every subject, attribute, action, setting and style cue they wrote must survive in the output. Do not drop, merge away or over-summarize what they gave you. Restructure and clarify THEIR prompt into the format and technical vocabulary the target model expects (per your instructions), and add only the supporting detail their idea needs to render well — camera, lighting, quality and structure cues that are implied by what they described. Do NOT invent new subjects, characters, objects, actions, backstory, settings or narrative that the user did not state or clearly imply; no embellishment for its own sake. When in doubt, preserve the user's own wording instead of rewriting it. The result must read as a faithful, well-structured version of THE USER'S prompt — not a different or more elaborate creative concept.${realismDefault}
+
+Return ONLY the prompt, no introduction, no explanation:\n\n${prompt}`
 
     if (effectiveProvider === 'anthropic') {
       const client = new Anthropic({ apiKey })
       const message = await client.messages.create({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1024,
+        max_tokens: 2048,
         system: config.systemPrompt,
         messages: [{ role: 'user', content: userMsg }],
       })

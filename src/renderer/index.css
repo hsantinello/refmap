@@ -124,6 +124,42 @@
     cursor: grabbing;
   }
 
+  /* Variante negativa — tom avermelhado para diferenciar da zona positiva */
+  .rm-builder-chip.is-negative {
+    background: rgba(239, 68, 68, 0.14);
+    color: rgba(254, 202, 202, 0.95);
+  }
+  .rm-builder-chip.is-negative:hover {
+    background: rgba(239, 68, 68, 0.22);
+    color: #fff;
+  }
+
+  /* Badge de peso dentro do chip */
+  .rm-weight-badge {
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 1;
+    padding: 1px 3px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.28);
+    color: rgba(255, 255, 255, 0.65);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Stepper ▲▼ de peso (aparece no hover do chip) */
+  .rm-weight-stepper > button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 8px;
+    padding: 0 2px;
+    color: rgba(255, 255, 255, 0.45);
+    transition: color 100ms;
+  }
+  .rm-weight-stepper > button:hover {
+    color: rgba(255, 255, 255, 0.95);
+  }
+
 }
 
 /* ─── Modal Animations ──────────────────────────────────────────────────────── */

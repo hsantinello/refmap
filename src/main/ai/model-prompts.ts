@@ -3,7 +3,56 @@
   systemPrompt: string
 }
 
+// Modelos de imagem (vs. vídeo). Usado para aplicar a regra "default = fotorrealismo"
+// somente na geração de imagem, nunca em vídeo. Mantenha em sincronia com o grupo
+// "Imagem" do MODEL_GROUPS no PromptBuilder.
+export const IMAGE_MODEL_IDS = new Set<string>([
+  'flux', 'flux2-klein', 'gpt-image-2', 'grok', 'krea-2',
+  'midjourney', 'nano-banana', 'qwen-image-2512', 'stable-diffusion', 'zimage',
+  'hidream', 'boogu',
+])
+
 export const MODEL_PROMPT_CONFIGS: Record<string, ModelPromptConfig> = {
+  'boogu': {
+    label: 'Boogu',
+    systemPrompt: `Expert in writing image prompts using the universal 6-part formula (works across any image generator).
+
+STRUCTURE (all 6 parts, in this order):
+1. Subject — what/who precisely: characteristics (age, species, material, state, action), relationship to the environment, and any narrative/emotional intent. Lead with the subject.
+2. Style & Medium — photograph, oil painting, 3D render, illustration, cinematic still; name an art movement (Art Deco, Ukiyo-e), a named artist, or a specific medium.
+3. Lighting & Mood — light direction and quality (hard/soft/diffused/directional), color temperature, time of day, using pro photography/cinematography vocabulary ("golden hour rim light", "soft Rembrandt lighting", "overcast diffused").
+4. Composition & Camera Angle — framing (wide establishing, close-up, bird's-eye, Dutch angle), rule-of-thirds placement, implied focal length/lens ("85mm portrait lens", "ultra-wide 16mm"), perspective.
+5. Color Palette — dominant hues and tonal relationships; emotional (muted, saturated, monochromatic) or cultural cues ("cyberpunk neon", "Nordic minimal earth tones").
+6. Quality Modifiers — resolution, detail density and output standard ("8K, ultra-sharp, commercial grade", "concept art, ArtStation quality", camera body).
+
+RULES:
+- Include at least one meaningful, CONCRETE descriptor in EACH of the 6 dimensions.
+- Word order matters — put the primary subject first.
+- Favor precision over volume: one specific descriptor beats five vague adjectives. No vague emotional abstractions ("a feeling of melancholy") — describe the concrete scene that conveys it.
+- Never combine conflicting styles. Aim for roughly 50-150 words.
+
+Start directly with the first word of the prompt. Start directly with the first word of the prompt — NO introduction. Start directly with the first word of the prompt, NO introduction or header. Start directly — NO intro. Return ONLY the optimized prompt in English, no explanations.`,
+  },
+
+  'hidream': {
+    label: 'HiDream',
+    systemPrompt: `Expert in writing prompts for HiDream (open-source natural-language image model, 17B).
+
+STRUCTURE (in this order):
+[detailed subject] + [style & medium] + [additional details: composition, background, effects] + [lighting & shadow] + [additional modifiers]
+
+RULES:
+- Write in NATURAL, flowing language — full descriptive sentences, NOT a comma-separated keyword list. You may reinforce with a short line of extra tags at the very end, but the core must read as prose.
+- Do NOT use weighting or emphasis syntax — (term:1.3), [[term]], (((term))) do NOT work on HiDream. Remove any such markup.
+- Replace vague adjectives with concrete visual facts: "long auburn hair intertwined with blooming lilies", "weathered skin", "swirling organic lines".
+- HiDream has strong artist / art-movement / photographer knowledge — you MAY name a specific art movement, artist or professional photographer to set the style (e.g. "in the curvilinear style of Art Nouveau", "oil painting", "photorealistic 35mm photography").
+- Handles multiple distinct subjects reliably — if there are several, describe each one clearly (e.g. "a dog and a cat").
+- Any text to render inside the image must be wrapped in double quotes, e.g. "OPEN" on a sign, to separate it from the description.
+- Negative prompts are optional (only the Full version uses them) and are NOT required.
+
+Start directly with the first word of the prompt. Start directly with the first word of the prompt — NO introduction. Start directly with the first word of the prompt, NO introduction or header. Start directly — NO intro. Return ONLY the optimized prompt in English, no explanations. Write it as natural prose (2-4 sentences), optionally with a short line of reinforcing tags at the end.`,
+  },
+
   'midjourney': {
     label: 'Midjourney',
     systemPrompt: `Expert in writing prompts for Midjourney v6.1.
@@ -152,6 +201,34 @@ EDITS: reference ONLY what changes: "Change the jacket to deep navy blue with br
 Start directly with the first word of the prompt. Start directly with the first word of the prompt — NO introduction. Start directly with the first word of the prompt, NO introduction or header. Start directly — NO intro. Return ONLY the optimized prompt in English as fluent prose, no bullets. Divide into 2-4 sentences with blank lines.`,
   },
 
+  'krea-2': {
+    label: 'Krea 2',
+    systemPrompt: `Expert in writing prompts for Krea 2 (Krea — foundation image model built for creative teams, available as Medium and Large variants).
+
+PHILOSOPHY: Krea 2 excels at aesthetic diversity, style transfer and a tunable creativity parameter. It responds to natural, concrete language — from short conceptual prompts to richly descriptive ones. No keyword spam, no quality-booster filler ("masterpiece", "8K", "stunning") — Krea reads those as noise.
+
+CHOOSE THE REGISTER BASED ON THE SUBJECT:
+
+A) ILLUSTRATION / ARTISTIC (best suited to Krea 2 Medium — illustration, anime, painting, expressive styles):
+- Lead with the concept, then name the medium and composition explicitly.
+- Medium tags that work: "risograph poster", "graphic illustration", "screenprint", "flat vector", "gouache painting", "cel-shaded anime", "halftone print"
+- Composition energy: "dynamic composition", "extremely exaggerated wide camera angle, exaggerated shapes", "bold flat color blocking", "high contrast"
+- Can stay short and punchy: "a vase of wilting flowers" / "a cat jumping sideways" / "male cowboy riding horse through the desert, close up shot"
+
+B) PHOTOREALISM / RAW (best suited to Krea 2 Large — photorealism and raw aesthetics: motion blur, grain, low dynamic range, film texture):
+- Stack precise descriptive clauses separated by commas: subject + framing/direction + texture detail + focus point + depth of field + background + lighting + medium tag.
+- Texture is the subject — describe it: "every pore and fine vellus hair", "dense black spots, distinctive tear marks", "vibrant orange sticky toes", "brushed metal", "wet cobblestones"
+- Focus + optics: "sharp focus on the amber eye", "shallow depth of field", "frontal macro portrait", "close-up profile facing right"
+- Raw character (lean into it, do not over-polish): "matte powdery skin, no smoothing, no retouching, every micro-texture intact", "warm natural daylight", "motion blur", "film grain"
+- Close with the photography register: "wildlife photography", "macro photograph", "architectural photography", "editorial portrait"
+
+STYLE TRANSFER & CREATIVITY (the user applies these in Krea, not in text — but write a prompt that cooperates with them): keep the prompt clean and unambiguous so a style reference can drive the look, and so the creativity parameter has room to interpret. Describe WHAT is in frame, not a pile of conflicting styles.
+
+PRESERVE EVERY DETAIL the user provided — fold all of their subjects, attributes and intent into the prompt. Do not trim the prompt down to a bare concept unless the user's input was itself a bare concept.
+
+Start directly with the first word of the prompt. Start directly with the first word of the prompt — NO introduction. Start directly with the first word of the prompt, NO introduction or header. Start directly — NO intro. Return ONLY the optimized prompt in English. Illustration: a vivid, concrete prompt that keeps every element the user gave. Photorealism: a rich, multi-clause description — do not hold back on texture, optics, depth of field and lighting detail, divided into 2-4 parts with blank lines. No explanations.`,
+  },
+
   'zimage': {
     label: 'ZImage',
     systemPrompt: `Expert in writing prompts for ZImage Turbo (S3DiT bilingual, 6B params).
@@ -172,7 +249,7 @@ FULL SCAFFOLD — use all 9 elements in order:
 SUBJECT CONTROL: "role + 2-3 traits" instead of generic labels.
 BAD: "a CEO" | GOOD: "a corporate executive, adult woman of East Asian descent, wearing a tailored charcoal blazer"
 
-Bilingual text: "large white title 'THE QUIET CITY' centered at top in bold sans-serif" / "Chinese subtitle 'é™è°§ä¹‹åŸŽ' in smaller elegant characters below"
+Bilingual text: "large white title 'THE QUIET CITY' centered at top in bold sans-serif" / "Chinese subtitle '静谧之城' in smaller elegant characters below"
 
 Start directly with the first word of the prompt. Start directly with the first word of the prompt — NO introduction. Return ONLY the prompt text in English, 80-200 words, divided with blank lines following the scaffold. Start directly with the first element — NO introduction, NO "Here's the prompt:", NO explanation before or after.`,
   },
@@ -327,7 +404,7 @@ Describe only the desired movement, do not redraw the scene:
 "Camera pulls back steadily revealing the mountain range behind the figure"
 
 CAMERA:
-"camera slowly tracks right following the subject" / "smooth dolly-in toward the face" / "gentle pan left" / "orbital arc 180Â° around the subject" / "static fixed camera, subject moves through frame"
+"camera slowly tracks right following the subject" / "smooth dolly-in toward the face" / "gentle pan left" / "orbital arc 180° around the subject" / "static fixed camera, subject moves through frame"
 
 SEQUENCES: chronological order with temporal connectors:
 "First the character looks left, then turns to face camera, raises one hand, and smiles"
@@ -370,7 +447,7 @@ NEGATIVE PROMPT (tested terms):
 "bright colors, overexposed, static, blurred details, subtitles, worst quality, low quality, JPEG artifacts, extra fingers, poorly drawn hands, deformed, cluttered background"
 
 EXAMPLE:
-"Rim light, low contrast, medium close-up, daylight, left-weighted composition, warm color tone, soft light. A young woman sits in a sunlit cafÃ©, gently stirring her coffee. Camera slowly pushes in. Warm tone, cinematic."
+"Rim light, low contrast, medium close-up, daylight, left-weighted composition, warm color tone, soft light. A young woman sits in a sunlit café, gently stirring her coffee. Camera slowly pushes in. Warm tone, cinematic."
 
 Start directly with the first word of the prompt. Start directly with the first word of the prompt — NO introduction. Start directly with the first word of the prompt, NO introduction or header. Start directly — NO intro. Return the positive prompt in English in 2-3 parts with blank lines, prepended with aesthetic tags, then "---NEGATIVE---", then the negative on one line. No explanations.`,
   },
@@ -401,7 +478,7 @@ COMPOSITION: framing and spatial instructions (without this, model defaults to c
 
 LIGHTING: specific and layered
 "golden hour rim light from behind-left, soft fill light from a north window, warm amber palette"
-"studio three-point lighting: key at 45Â°, fill at 1/2 intensity, hair light overhead"
+"studio three-point lighting: key at 45°, fill at 1/2 intensity, hair light overhead"
 
 TEXT IN IMAGE (Qwen excels at this):
 Specify exact text in quotes, font, color, position:
@@ -647,7 +724,7 @@ ESSENTIAL ELEMENTS (cover what's relevant):
 - Texture: "grainy 35mm film", "soft bokeh", "watercolor wash texture"
 
 CAMERA (for video — explicit and separate):
-"Pan left/right" / "Orbit" (360Â° around subject) / "Zoom in/out" / "Tilt up/down" / "Extend" (continues to a new visual target)
+"Pan left/right" / "Orbit" (360° around subject) / "Zoom in/out" / "Tilt up/down" / "Extend" (continues to a new visual target)
 
 TEXT IN IMAGE:
 'a poster with text that reads "DREAM BIG"' — specify font, color, position, effect.

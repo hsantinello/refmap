@@ -6,33 +6,36 @@ function buildVisionPrompt(lang: 'en' | 'pt' = 'en'): string {
   const langRule = lang === 'pt'
     ? '- Write every chunk in Brazilian Portuguese'
     : '- Write in English'
-  return `Analyze this AI-generated image and describe it as detailed prompt chunks for image generation.
+  return `Analyze this image and describe it as precise, prompt-ready chunks for image generation.
 
 Format: {main subject}[modifier][modifier]...
+Put the MAIN SUBJECT inside {curly braces} and lead with it. Everything else goes in [brackets] AFTER the subject.
 
-Cover ALL of these aspects with specific, descriptive chunks:
-- SUBJECT: who/what is the main focus, their appearance, expression, pose, clothing, accessories
-- COMPOSITION: framing, angle, perspective, depth of field, foreground/background elements
-- SETTING: environment, location, time of day, weather, atmosphere
-- LIGHTING: type, direction, quality, shadows, highlights, color temperature
-- COLOR: dominant palette, color grading, saturation, contrast
-- STYLE: artistic style, rendering technique, medium (digital art, photography, painting, etc.)
-- QUALITY: render quality, detail level, sharpness, texture
-- MOOD: emotional tone, ambiance
+Describe in THIS order — the subject first and most carefully:
+1. SUBJECT — identify it PRECISELY: exactly what/who it is, and how many. Name it concretely (species, type, breed, object kind) and capture the traits that define THIS subject (pose, expression, key features). If there are several subjects, name each precisely, but state a shared trait only once — never repeat the same modifier for each.
+2. SETTING — environment, location, background elements, time of day.
+3. LIGHTING — type, direction, quality, color temperature.
+4. COMPOSITION — framing, angle, perspective, depth of field.
+5. COLOR — dominant palette, grading, saturation.
+6. STYLE — medium and rendering (photography, digital art, painting, 3D…), technique.
+7. MOOD — emotional tone, atmosphere.
 
 Rules:
-- Create 15-25 chunks total
-- Each chunk is a short, specific, prompt-ready phrase
-- Be precise and descriptive — avoid generic terms like "beautiful" or "nice"
+- PRECISION over quantity. Every chunk must be concrete and useful in a prompt. Cut vague filler like "small size", "front-facing pose", "no accessories", "beautiful", "nice".
+- The subject is the priority: get WHAT it is exactly right before describing anything else.
+- For every living being or key object, ALSO add a separate chunk with its plain generic noun in the target language (e.g. besides "shih tzu puppy" add "dog"; besides "tabby kitten" add "cat"; besides "sports car" add "car") so it stays searchable by the common word.
+- 12-20 chunks total, each a short specific phrase. Fewer precise chunks beat many loose ones. No duplicates.
 ${langRule}
 - If the image contains nudity, explicit sexual content, or adult-only material, include [nsfw] as one of the chunks
 - Return ONLY the formatted string, nothing else
 
-Example: {a female warrior}[long silver braided hair][wearing dark leather armor][holding a glowing sword][fierce determined expression][standing on a cliff edge][stormy sky background][dramatic rim lighting][deep shadows][cool blue and purple color grade][cinematic composition][low angle shot][hyperrealistic digital art][8k ultra detailed][volumetric fog][epic fantasy atmosphere]`
+Example: {a shih tzu puppy flanked by two tabby kittens}[dog][cat][the three standing upright on hind legs][open mouths with tongues out][playful energetic expressions][cozy living room background][soft warm lamp light from the left][shallow depth of field][eye-level frontal shot][warm cream and brown palette][photorealistic pet photography][cheerful lighthearted mood]`
 }
 
 export async function analyzeWithAnthropic(imagePath: string, apiKey: string, lang: 'en' | 'pt' = 'en'): Promise<string> {
-  const client = new Anthropic({ apiKey })
+  // timeout + capped retries so a slow/hung endpoint fails cleanly instead of
+  // leaving the UI spinner analyzing forever (mesmo padrão do openai.ts).
+  const client = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 })
 
   const imageBuffer = await fs.readFile(imagePath)
   const base64 = imageBuffer.toString('base64')
@@ -52,5 +55,5 @@ export async function analyzeWithAnthropic(imagePath: string, apiKey: string, la
     }],
   })
 
-  return response.content[0].type === 'text' ? response.content[0].text.trim() : ''
+  return response.content[0]?.type === 'text' ? response.content[0].text.trim() : ''
 }

@@ -26,6 +26,9 @@ export default defineConfig({
     'out/**/*',
     'node_modules/**/*',
     '!node_modules/.cache',
+    // Ícone lido em runtime por index.ts (../../ID/icone app.png). Glob
+    // ESPECÍFICO — nunca 'ID/**', que arrastaria o .mov de 254 MB e o .aep.
+    'ID/icone app.png',
   ],
 
   win: {
@@ -43,7 +46,7 @@ export default defineConfig({
 
   mac: {
     target: [{ target: 'dmg', arch: ['x64', 'arm64'] }],
-    icon: 'build/icon.icns',
+    icon: 'build/icon.png',
     category: 'public.app-category.graphics-design',
   },
 })
