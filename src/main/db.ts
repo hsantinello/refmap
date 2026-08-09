@@ -161,6 +161,8 @@ export const nodeQueries = {
     `).run(node.id, node.canvasId, node.imagePath, node.x, node.y, node.width, node.height, node.source, node.parentId ?? null, node.nodeType ?? 'image', node.linkedNodeId ?? null, node.comfyParams ?? null),
   updateMetadata: (id: string, source: string, modelName?: string) =>
     getDb().prepare('UPDATE nodes SET metadata_source = ?, model_name = ? WHERE id = ?').run(source, modelName ?? null, id),
+  updateComfyParams: (id: string, comfyParams: string | null) =>
+    getDb().prepare('UPDATE nodes SET comfy_params = ? WHERE id = ?').run(comfyParams ?? null, id),
   updatePosition: (id: string, x: number, y: number) =>
     getDb().prepare('UPDATE nodes SET position_x = ?, position_y = ? WHERE id = ?').run(x, y, id),
   updateSize: (id: string, width: number, height: number) =>

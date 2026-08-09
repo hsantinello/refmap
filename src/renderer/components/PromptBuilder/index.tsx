@@ -17,9 +17,14 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { usePromptStore, useCanvasStore, WEIGHT_STEP, type PromptTag } from '../../store'
+import { recordDuration, getEstimateSeconds } from '../../lib/estimate'
+import { ensureWhisper, transcribeLocal, isWhisperReady } from '../../lib/localWhisper'
 
-function MicButton({ onTranscript }: { onTranscript: (text: string) => void }) {
-  const [state, setState] = useState<'idle' | 'recording' | 'transcribing' | 'error'>('idle')
+// hasCloudKey = há transcrição na nuvem disponível (Whisper OpenAI/Together). Sem isso
+// (ex.: provedor ativo = Claude, que não transcreve), cai no Whisper local, gratuito.
+function MicButton({ onTranscript, hasCloudKey }: { onTranscript: (text: string) => void; hasCloudKey: boolean }) {
+  const [state, setState] = useState<'idle' | 'recording' | 'downloading' | 'transcribing' | 'error'>('idle')
+  const [dlPercent, setDlPercent] = useState(0)
   const [errorMsg, setErrorMsg] = useState('')
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -28,6 +33,7 @@ function MicButton({ onTranscript }: { onTranscript: (text: string) => void }) {
   const audioCtxRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const rafRef = useRef<number | null>(null)
+  const toggleRef = useRef<() => void>(() => {}) // aponta pro toggle atual (p/ atalho Ctrl+D)
 
   const stopVisualizer = () => {
     if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
@@ -100,14 +106,28 @@ function MicButton({ onTranscript }: { onTranscript: (text: string) => void }) {
     streamRef.current?.getTracks().forEach(t => t.stop())
   }, [])
 
+  // Atalho global Ctrl+D (ou ⌘+D): liga/desliga o microfone pra ditar. Captura no
+  // topo (capture: true) pra funcionar mesmo com o cursor dentro do campo de texto.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault()
+        e.stopPropagation()
+        toggleRef.current()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+
   const showError = (msg: string) => {
     setErrorMsg(msg)
     setState('error')
-    setTimeout(() => setState('idle'), 3000)
+    setTimeout(() => setState('idle'), 7000)
   }
 
   const toggle = async () => {
-    if (state === 'transcribing' || state === 'error') return
+    if (state === 'transcribing' || state === 'downloading' || state === 'error') return
 
     if (state === 'recording') {
       recorderRef.current?.stop()
@@ -127,15 +147,30 @@ function MicButton({ onTranscript }: { onTranscript: (text: string) => void }) {
         streamRef.current?.getTracks().forEach(t => t.stop())
         streamRef.current = null
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType })
-        const buffer = await blob.arrayBuffer()
-        setState('transcribing')
         try {
-          const text = await window.api.transcribeAudio(new Uint8Array(buffer))
-          if (text?.trim()) onTranscript(text.trim())
+          if (hasCloudKey) {
+            // Nuvem: Whisper da OpenAI/Together (rápido).
+            setState('transcribing')
+            const buffer = await blob.arrayBuffer()
+            const text = await window.api.transcribeAudio(new Uint8Array(buffer))
+            if (text?.trim()) onTranscript(text.trim())
+          } else {
+            // Local: Whisper no próprio app (grátis, roda num worker → não trava a UI).
+            // Baixa o modelo na 1ª vez (whisper-small, ~250MB).
+            if (!isWhisperReady()) { setDlPercent(0); setState('downloading') }
+            await ensureWhisper(p => {
+              if (p.status === 'progress' && typeof p.progress === 'number') setDlPercent(Math.round(p.progress))
+            })
+            setState('transcribing')
+            const text = await transcribeLocal(blob)
+            if (text?.trim()) onTranscript(text.trim())
+          }
           setState('idle')
         } catch (err) {
-          const msg = String(err)
+          console.error('[transcrição] erro:', err)
+          const msg = String((err as Error)?.message || err)
           if (msg.includes('NO_OPENAI_KEY')) showError('Chave API não configurada')
+          else if (!hasCloudKey) showError(`Local: ${msg.slice(0, 140)}`)
           else showError('Erro ao transcrever')
         }
       }
@@ -146,14 +181,16 @@ function MicButton({ onTranscript }: { onTranscript: (text: string) => void }) {
       showError('Sem acesso ao microfone')
     }
   }
+  toggleRef.current = toggle // mantém o atalho Ctrl+D chamando o toggle mais recente
 
-  const label = state === 'recording' ? 'Parar gravação'
+  const label = state === 'recording' ? 'Parar gravação (Ctrl+D)'
+    : state === 'downloading' ? `Baixando modelo de voz… ${dlPercent}%`
     : state === 'transcribing' ? 'Transcrevendo...'
     : state === 'error' ? errorMsg
-    : 'Ditar prompt'
+    : hasCloudKey ? 'Ditar prompt (Ctrl+D)' : 'Ditar prompt · voz local grátis (Ctrl+D)'
 
   const bgClass = state === 'recording' ? 'bg-red-500/20'
-    : state === 'transcribing' ? 'bg-orange-500/15'
+    : state === 'downloading' || state === 'transcribing' ? 'bg-orange-500/15'
     : state === 'error' ? 'bg-red-500/10'
     : 'hover:bg-white/[0.07]'
 
@@ -163,14 +200,14 @@ function MicButton({ onTranscript }: { onTranscript: (text: string) => void }) {
         type="button"
         onClick={toggle}
         title={label}
-        disabled={state === 'transcribing'}
+        disabled={state === 'transcribing' || state === 'downloading'}
         className={`p-2.5 rounded-lg transition-all ${bgClass}`}
       >
         {state === 'recording' ? (
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
             <rect x="6" y="6" width="12" height="12" rx="2" fill="#ef4444" opacity="0.8"/>
           </svg>
-        ) : state === 'transcribing' ? (
+        ) : state === 'downloading' || state === 'transcribing' ? (
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" className="animate-spin">
             <circle cx="12" cy="12" r="9" stroke="rgba(249,115,22,0.3)" strokeWidth="2"/>
             <path d="M12 3a9 9 0 019 9" stroke="#f97316" strokeWidth="2" strokeLinecap="round"/>
@@ -194,8 +231,17 @@ function MicButton({ onTranscript }: { onTranscript: (text: string) => void }) {
           <canvas ref={canvasRef} width={120} height={26} style={{ width: 120, height: 26 }} />
         </div>
       )}
+      {state === 'downloading' && (
+        <div className="absolute right-full mr-2 top-1/2 -translate-y-1/2 flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-black/85 border border-white/10 shadow-[0_12px_32px_rgba(0,0,0,0.6)] pointer-events-none backdrop-blur-md">
+          <span className="text-[11px] text-white/70 whitespace-nowrap">Baixando voz local</span>
+          <div className="w-16 h-1 rounded-full bg-white/10 overflow-hidden">
+            <div className="h-full rounded-full bg-orange-500 transition-all" style={{ width: `${dlPercent}%` }} />
+          </div>
+          <span className="text-[11px] text-white/50 tabular-nums w-8 text-right">{dlPercent}%</span>
+        </div>
+      )}
       {state === 'error' && (
-        <div className="absolute bottom-full mb-2 right-0 whitespace-nowrap px-2.5 py-1.5 rounded-lg text-[11px] text-red-400 bg-red-500/10 border border-red-500/20 pointer-events-none">
+        <div className="absolute bottom-full mb-2 right-0 w-56 px-2.5 py-1.5 rounded-lg text-[11px] leading-snug text-red-400 bg-red-500/10 border border-red-500/20 pointer-events-none break-words">
           {errorMsg}
         </div>
       )}
@@ -242,10 +288,10 @@ function InsertZone({ index, activeIndex, onActivate, onCommit, onCancel }: {
   )
 }
 
-function SortableChip({ tag, zone }: { tag: PromptTag; zone: 'positive' | 'negative' }) {
+function SortableChip({ tag }: { tag: PromptTag }) {
   const store = usePromptStore()
-  const removeTag = zone === 'negative' ? store.removeNegativeTag : store.removeTag
-  const updateTagText = zone === 'negative' ? store.updateNegativeTagText : store.updateTagText
+  const removeTag = store.removeTag
+  const updateTagText = store.updateTagText
   const setTagWeight = store.setTagWeight
   const {
     attributes, listeners, setNodeRef,
@@ -278,7 +324,7 @@ function SortableChip({ tag, zone }: { tag: PromptTag; zone: 'positive' | 'negat
       data-chip
       style={style}
       onContextMenu={e => { e.preventDefault(); e.stopPropagation(); window.dispatchEvent(new CustomEvent('save-to-my-presets', { detail: { value: tag.value } })) }}
-      className={`rm-builder-chip group ${zone === 'negative' ? 'is-negative' : ''} ${isDragging ? 'opacity-45 shadow-xl' : ''}`}
+      className={`rm-builder-chip group ${isDragging ? 'opacity-45 shadow-xl' : ''}`}
       {...attributes}
       {...listeners}
     >
@@ -340,26 +386,20 @@ function SortableChip({ tag, zone }: { tag: PromptTag; zone: 'positive' | 'negat
   )
 }
 
-// Zona de chips reutilizável (positiva e negativa). É um droppable dnd-kit,
-// então aceita chips arrastados da outra zona; o InsertZone final permite digitar.
+// Zona de chips do prompt. É um droppable dnd-kit; o InsertZone final permite digitar.
 function ChipZone({
-  zone, tags, activeInsert, setActiveInsert, onInsert, emptyHint,
+  tags, activeInsert, setActiveInsert, onInsert,
 }: {
-  zone: 'positive' | 'negative'
   tags: PromptTag[]
   activeInsert: number | null
   setActiveInsert: (i: number | null) => void
   onInsert: (value: string, index: number) => void
-  emptyHint?: string
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: `zone-${zone}` })
+  const { setNodeRef } = useDroppable({ id: 'zone-positive' })
   return (
     <div
       ref={setNodeRef}
-      className={`flex flex-wrap items-start gap-1.5 pb-2 max-h-[90px] overflow-y-auto overflow-x-hidden cursor-text ${
-        zone === 'negative' ? 'rounded-lg transition-colors' : ''
-      } ${isOver && zone === 'negative' ? 'bg-red-500/[0.06]' : ''}`}
-      style={emptyHint && tags.length === 0 ? { minHeight: 32 } : undefined}
+      className="flex flex-wrap items-start gap-1.5 pb-2 max-h-[90px] overflow-y-auto overflow-x-hidden cursor-text"
       onMouseDown={e => {
         const target = e.target as Element
         if (target.closest('[data-chip]') || target.closest('[data-insert-zone]')) return
@@ -377,7 +417,7 @@ function ChipZone({
               onCommit={v => { onInsert(v, i); setActiveInsert(null) }}
               onCancel={() => setActiveInsert(null)}
             />
-            <SortableChip tag={tag} zone={zone} />
+            <SortableChip tag={tag} />
           </Fragment>
         ))}
       </SortableContext>
@@ -388,9 +428,6 @@ function ChipZone({
         onCommit={v => { onInsert(v, tags.length); setActiveInsert(null) }}
         onCancel={() => setActiveInsert(null)}
       />
-      {tags.length === 0 && emptyHint && activeInsert === null && (
-        <span className="text-[11px] text-white/20 self-center pointer-events-none pl-1">{emptyHint}</span>
-      )}
     </div>
   )
 }
@@ -401,13 +438,18 @@ function getCaretIndexInTextarea(textarea: HTMLTextAreaElement, clientX: number,
 
   const cs = window.getComputedStyle(textarea)
   const rect = textarea.getBoundingClientRect()
+  const bTop = parseFloat(cs.borderTopWidth) || 0
+  const bLeft = parseFloat(cs.borderLeftWidth) || 0
 
   const mirror = document.createElement('div')
   Object.assign(mirror.style, {
     position: 'fixed',
-    top: rect.top + 'px',
-    left: rect.left + 'px',
-    width: rect.width + 'px',
+    // Alinha ao box de conteúdo do textarea e compensa o scroll. clientWidth já
+    // exclui a BORDA e a BARRA DE ROLAGEM — sem isso o espelho fica mais largo,
+    // quebra as linhas em pontos diferentes e o mapeamento sai ~1 linha deslocado.
+    top: (rect.top + bTop - textarea.scrollTop) + 'px',
+    left: (rect.left + bLeft - textarea.scrollLeft) + 'px',
+    width: textarea.clientWidth + 'px',
     fontFamily: cs.fontFamily,
     fontSize: cs.fontSize,
     fontWeight: cs.fontWeight,
@@ -417,30 +459,42 @@ function getCaretIndexInTextarea(textarea: HTMLTextAreaElement, clientX: number,
     paddingBottom: cs.paddingBottom,
     paddingLeft: cs.paddingLeft,
     paddingRight: cs.paddingRight,
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
+    // Copia a quebra de linha EXATA do textarea pra o espelho quebrar igual.
+    whiteSpace: cs.whiteSpace === 'normal' ? 'pre-wrap' : cs.whiteSpace,
+    wordBreak: cs.wordBreak,
+    overflowWrap: cs.overflowWrap,
     overflowX: 'hidden',
     opacity: '0',
+    pointerEvents: 'none',
     zIndex: '2147483647',
     boxSizing: 'border-box',
   })
 
   for (let i = 0; i < text.length; i++) {
     const span = document.createElement('span')
-    span.textContent = text[i]
+    span.textContent = text[i] // espaço já tem largura com pre-wrap; sem NBSP p/ não somar erro
     mirror.appendChild(span)
   }
 
   document.body.appendChild(mirror)
 
+  // Em vez de exigir acerto exato num caractere (elementFromPoint), acha o
+  // caractere MAIS PRÓXIMO do ponto solto: prioriza fortemente a linha certa
+  // (distância vertical) e, dentro dela, decide antes/depois pelo centro do
+  // caractere no eixo X. Assim soltar em espaço vazio / fim de linha / margem
+  // insere onde faz sentido visualmente, não sempre no fim.
+  const spans = Array.from(mirror.children) as HTMLSpanElement[]
   let index = text.length
-  const el = document.elementFromPoint(clientX, clientY)
-  if (el && mirror.contains(el)) {
-    const spans = Array.from(mirror.children) as HTMLSpanElement[]
-    const spanIdx = spans.indexOf(el as HTMLSpanElement)
-    if (spanIdx >= 0) {
-      const r = el.getBoundingClientRect()
-      index = clientX > r.left + r.width / 2 ? spanIdx + 1 : spanIdx
+  let bestDist = Infinity
+  for (let i = 0; i < spans.length; i++) {
+    const r = spans[i].getBoundingClientRect()
+    const dy = clientY < r.top ? r.top - clientY : clientY > r.bottom ? clientY - r.bottom : 0
+    const cx = r.left + r.width / 2
+    const dx = Math.abs(clientX - cx)
+    const dist = dy * 10000 + dx // linha domina; X desempata dentro da linha
+    if (dist < bestDist) {
+      bestDist = dist
+      index = clientX > cx ? i + 1 : i
     }
   }
 
@@ -452,13 +506,17 @@ function getCaretPixelPosition(textarea: HTMLTextAreaElement, index: number): { 
   const cs = window.getComputedStyle(textarea)
   const rect = textarea.getBoundingClientRect()
   const text = textarea.value
+  const bTop = parseFloat(cs.borderTopWidth) || 0
+  const bLeft = parseFloat(cs.borderLeftWidth) || 0
 
   const mirror = document.createElement('div')
   Object.assign(mirror.style, {
     position: 'fixed',
-    top: rect.top + 'px',
-    left: rect.left + 'px',
-    width: rect.width + 'px',
+    // Mesmo box de conteúdo / clientWidth de getCaretIndexInTextarea, pra o preview
+    // do caret bater exatamente com o ponto de inserção calculado no drop.
+    top: (rect.top + bTop - textarea.scrollTop) + 'px',
+    left: (rect.left + bLeft - textarea.scrollLeft) + 'px',
+    width: textarea.clientWidth + 'px',
     fontFamily: cs.fontFamily,
     fontSize: cs.fontSize,
     fontWeight: cs.fontWeight,
@@ -468,8 +526,9 @@ function getCaretPixelPosition(textarea: HTMLTextAreaElement, index: number): { 
     paddingBottom: cs.paddingBottom,
     paddingLeft: cs.paddingLeft,
     paddingRight: cs.paddingRight,
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
+    whiteSpace: cs.whiteSpace === 'normal' ? 'pre-wrap' : cs.whiteSpace,
+    wordBreak: cs.wordBreak,
+    overflowWrap: cs.overflowWrap,
     overflowX: 'hidden',
     visibility: 'hidden',
     zIndex: '2147483647',
@@ -589,12 +648,13 @@ const MODEL_GROUPS = [
       { id: 'hailuo',      label: 'Hailuo Minimax' },
       { id: 'hunyuan',     label: 'HunYuan Video',     nsfw: true },
       { id: 'kling-3',     label: 'Kling 3.0' },
-      { id: 'ltx-2',       label: 'LTX-2',             nsfw: true },
+      { id: 'ltx-2',       label: 'LTX 2.3',           nsfw: true },
       { id: 'luma',        label: 'Luma Dream Machine' },
+      { id: 'minimax-h3',  label: 'MiniMax H3',        nsfw: true },
       { id: 'pika',        label: 'Pika' },
       { id: 'pixverse',    label: 'PixVerse' },
       { id: 'runway-gen4', label: 'Runway Gen-4' },
-      { id: 'seedance',    label: 'Seedance 2.0' },
+      { id: 'seedance',    label: 'Seedance 2.5' },
       { id: 'sora-2',      label: 'Sora 2' },
       { id: 'veo3',        label: 'Veo 3' },
       { id: 'wan',         label: 'Wan 2.2',            nsfw: true },
@@ -605,16 +665,13 @@ const MODEL_GROUPS = [
 const MODELS = MODEL_GROUPS.flatMap(g => g.models)
 const modelLabel = (id?: string) => id ? (MODELS.find(m => m.id === id)?.label ?? id) : undefined
 
-type HistoryEntry = { text: string; model?: string }
+// `source` = prompt original que deu origem ao otimizado (para restaurar).
+type HistoryEntry = { text: string; model?: string; source?: string }
 
 export default function PromptBuilder() {
   const {
     promptTags, reorderTags, clearAll, getPromptString, insertTagAt, removeTag, updateTagText,
-    negativeTags, getNegativeString, insertNegativeAt, reorderNegativeTags, removeNegativeTag,
-    updateNegativeTagText, setNegativeFromString, moveToNegative, moveToPositive, clearNegative,
   } = usePromptStore()
-  const [negInsertIndex, setNegInsertIndex] = useState<number | null>(null)
-  const [showNegative, setShowNegative] = useState(false)
   const dragPointerRef = useRef({ x: 0, y: 0 })
   const dragCleanupRef = useRef<(() => void) | null>(null)
   const [insertIndex, setInsertIndex] = useState<number | null>(null)
@@ -630,14 +687,10 @@ export default function PromptBuilder() {
   useEffect(() => {
     const checkKey = async () => {
       const provider = ((await window.api.getSetting('aiProvider')) ?? 'anthropic') as string
-      const [activeKey, openaiKey] = await Promise.all([
-        window.api.getApiKey(provider),
-        window.api.getApiKey('openai'),
-      ])
-      const canTranscribe = !!(
-        (activeKey?.trim() && (activeKey.startsWith('tgp_') || provider === 'openai')) ||
-        openaiKey?.trim()
-      )
+      const activeKey = await window.api.getApiKey(provider)
+      // Transcrição na nuvem só quando o PROVEDOR ATIVO transcreve (OpenAI Whisper ou
+      // Together via chave tgp_). Com Claude ativo (não transcreve) cai no Whisper local.
+      const canTranscribe = !!(activeKey?.trim() && (activeKey.startsWith('tgp_') || provider === 'openai'))
       setHasOpenAIKey(canTranscribe)
     }
     checkKey()
@@ -656,7 +709,7 @@ export default function PromptBuilder() {
         const normalized: HistoryEntry[] = Array.isArray(parsed)
           ? parsed.map((e: unknown) => typeof e === 'string'
               ? { text: e }
-              : { text: (e as HistoryEntry).text, model: (e as HistoryEntry).model })
+              : { text: (e as HistoryEntry).text, model: (e as HistoryEntry).model, source: (e as HistoryEntry).source })
           : []
         setHistory(normalized)
       } catch { setHistory([]) }
@@ -667,10 +720,17 @@ export default function PromptBuilder() {
   const [targetModel, setTargetModel] = useState<string | null>(null)
   const [showModels, setShowModels] = useState(false)
   const [optimizing, setOptimizing] = useState(false)
+  const [optElapsed, setOptElapsed] = useState(0)          // segundos decorridos
+  const [optEstimate, setOptEstimate] = useState<number | null>(null) // estimativa (s)
+  const optTimerRef = useRef<ReturnType<typeof setInterval>>(undefined)
   const [optimizeError, setOptimizeError] = useState<string | null>(null)
+  // Falta de configuração ao otimizar (sem chave e IA local indisponível) →
+  // mostramos um botão-CTA com a orientação certa, em vez do erro cru do IPC.
+  // null = tudo ok; string = mensagem a exibir no CTA (clicável → Settings).
+  const [setupHint, setSetupHint] = useState<string | null>(null)
   const [translatingPrompt, setTranslatingPrompt] = useState(false)
   const [promptTranslated, setPromptTranslated] = useState(false)
-  const preTranslateRef = useRef<{ tags: { id: string; value: string }[]; negTags: { id: string; value: string }[]; input: string } | null>(null)
+  const preTranslateRef = useRef<{ tags: { id: string; value: string }[]; input: string } | null>(null)
   const [dropdownPos, setDropdownPos] = useState({ x: 0, y: 0 })
   const modelRef = useRef<HTMLDivElement>(null)
   const modelBtnRef = useRef<HTMLButtonElement>(null)
@@ -699,6 +759,7 @@ export default function PromptBuilder() {
 
   useEffect(() => {
     const handler = () => {
+      setSetupHint(null)
       const modelId = pendingModelRef.current
       if (!modelId) return
       pendingModelRef.current = null
@@ -706,6 +767,16 @@ export default function PromptBuilder() {
     }
     window.addEventListener('apikey-changed', handler)
     return () => window.removeEventListener('apikey-changed', handler)
+  }, [])
+
+  // Recebe um prompt gerado externamente (ex.: prompt de animação de 2 imagens) → joga no input.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const text = (e as CustomEvent<{ text: string }>).detail?.text
+      if (text) { setInputText(text); setPromptTranslated(false); preTranslateRef.current = null }
+    }
+    window.addEventListener('set-prompt-text', handler as EventListener)
+    return () => window.removeEventListener('set-prompt-text', handler as EventListener)
   }, [])
 
   const sensors = useSensors(
@@ -726,11 +797,10 @@ export default function PromptBuilder() {
     if (!over) return
     const activeId = String(active.id)
     const overId = String(over.id)
-    const inPos = promptTags.some(t => t.id === activeId)
 
-    // Soltar no textarea positivo → o chip vira texto livre
+    // Soltar no textarea → o chip vira texto livre
     if (overId === 'textarea-drop') {
-      const tag = (inPos ? promptTags : negativeTags).find(t => t.id === activeId)
+      const tag = promptTags.find(t => t.id === activeId)
       if (!tag || !textInputRef.current) return
       const { x, y } = dragPointerRef.current
       const pos = getCaretIndexInTextarea(textInputRef.current, x, y)
@@ -739,43 +809,19 @@ export default function PromptBuilder() {
       const sep1 = before && !before.match(/[,\s]$/) ? ', ' : ''
       const sep2 = after && !after.match(/^[,\s]/) ? ', ' : ''
       setInputText(before + sep1 + tag.value + sep2 + after)
-      if (inPos) removeTag(activeId); else removeNegativeTag(activeId)
+      removeTag(activeId)
       return
     }
 
-    const overInNeg = overId === 'zone-negative' || negativeTags.some(t => t.id === overId)
-    const overInPos = overId === 'zone-positive' || promptTags.some(t => t.id === overId)
-
-    // Mover entre zonas (preserva o peso)
-    if (inPos && overInNeg) {
-      const idx = negativeTags.findIndex(t => t.id === overId)
-      moveToNegative(activeId, idx >= 0 ? idx : undefined)
-      return
-    }
-    if (!inPos && overInPos) {
-      const idx = promptTags.findIndex(t => t.id === overId)
-      moveToPositive(activeId, idx >= 0 ? idx : undefined)
-      return
-    }
-
-    // Reordenar dentro da mesma zona
+    // Reordenar dentro do prompt
     if (activeId === overId) return
-    if (inPos) {
-      const from = promptTags.findIndex(t => t.id === activeId)
-      const to = promptTags.findIndex(t => t.id === overId)
-      if (from >= 0 && to >= 0) reorderTags(from, to)
-    } else {
-      const from = negativeTags.findIndex(t => t.id === activeId)
-      const to = negativeTags.findIndex(t => t.id === overId)
-      if (from >= 0 && to >= 0) reorderNegativeTags(from, to)
-    }
+    const from = promptTags.findIndex(t => t.id === activeId)
+    const to = promptTags.findIndex(t => t.id === overId)
+    if (from >= 0 && to >= 0) reorderTags(from, to)
   }
 
   const handleCopy = () => {
-    const pos = [getPromptString(), inputText.trim()].filter(Boolean).join(', ')
-    const neg = getNegativeString().trim()
-    // Convenção A1111/Forge: negativo em linha própria (ComfyUI ignora, sem quebrar).
-    const text = neg ? (pos ? `${pos}\nNegative prompt: ${neg}` : `Negative prompt: ${neg}`) : pos
+    const text = [getPromptString(), inputText.trim()].filter(Boolean).join(', ')
     if (!text) return
     navigator.clipboard.writeText(text)
     setCopied(true)
@@ -790,11 +836,11 @@ export default function PromptBuilder() {
 
   const handleClearAll = () => {
     clearAll()
-    clearNegative()
-    setShowNegative(false)
     setInputText('')
     setPromptTranslated(false)
     preTranslateRef.current = null
+    setSetupHint(null)
+    setOptimizeError(null)
   }
 
   const handleTranslatePrompt = async () => {
@@ -805,7 +851,6 @@ export default function PromptBuilder() {
       const orig = preTranslateRef.current
       if (orig) {
         orig.tags.forEach(t => updateTagText(t.id, t.value))
-        orig.negTags.forEach(t => updateNegativeTagText(t.id, t.value))
         setInputText(orig.input)
       }
       setPromptTranslated(false)
@@ -816,8 +861,6 @@ export default function PromptBuilder() {
     const inputTrim = inputText.trim()
     const values = promptTags.map(t => t.value)
     if (inputTrim) values.push(inputTrim)
-    const negStart = values.length
-    negativeTags.forEach(t => values.push(t.value))
     if (values.length === 0) return
 
     setTranslatingPrompt(true)
@@ -826,7 +869,6 @@ export default function PromptBuilder() {
       // Guarda originais para conseguir voltar ao inglês.
       preTranslateRef.current = {
         tags: promptTags.map(t => ({ id: t.id, value: t.value })),
-        negTags: negativeTags.map(t => ({ id: t.id, value: t.value })),
         input: inputText,
       }
       promptTags.forEach((t, i) => { if (translated[i]) updateTagText(t.id, translated[i]) })
@@ -834,7 +876,6 @@ export default function PromptBuilder() {
         const ti = translated[promptTags.length]
         if (ti) setInputText(ti)
       }
-      negativeTags.forEach((t, j) => { if (translated[negStart + j]) updateNegativeTagText(t.id, translated[negStart + j]) })
       setPromptTranslated(true)
     } catch (err) {
       console.error('[translate-prompt]', err)
@@ -858,48 +899,63 @@ export default function PromptBuilder() {
 
     setOptimizing(true)
     setOptimizeError(null)
+    setSetupHint(null)
+    // Cronômetro + estimativa adaptativa (média das últimas otimizações).
+    const startedAt = Date.now()
+    setOptElapsed(0)
+    setOptEstimate(null)
+    getEstimateSeconds('optimize').then(setOptEstimate).catch(() => {})
+    clearInterval(optTimerRef.current)
+    optTimerRef.current = setInterval(() => setOptElapsed(Math.round((Date.now() - startedAt) / 1000)), 500)
     try {
       const optimized = await window.api.optimizePrompt(currentPrompt, modelId)
-      const [positive, negative] = optimized.split('---NEGATIVE---')
+      recordDuration('optimize', Date.now() - startedAt) // alimenta a estimativa
+      // Só o positivo interessa. Descarta qualquer bloco após ---NEGATIVE--- que
+      // algum modelo ainda devolva (defesa contra resíduo do prompt do modelo).
+      const [positive] = optimized.split('---NEGATIVE---')
       const text = positive.split('\n').map((l: string) => l.trim()).filter(Boolean).join('\n')
       clearAll()
       setInputText(text)
-      // Modelos como SD/Wan retornam um negative prompt — antes descartado. Captura na zona negativa.
-      if (negative?.trim()) {
-        setNegativeFromString(negative)
-        setShowNegative(true)
-      }
       setTargetModel(null)
       setPromptTranslated(false)
       preTranslateRef.current = null
-      // Save optimized prompt to history (com o modelo pelo qual foi otimizado)
+      // Save optimized prompt to history (com o modelo e o prompt original que o gerou)
       if (currentCanvasId) {
-        const newHistory: HistoryEntry[] = [{ text, model: modelId }, ...history.filter(h => h.text !== text)].slice(0, 10)
+        const newHistory: HistoryEntry[] = [{ text, model: modelId, source: currentPrompt }, ...history.filter(h => h.text !== text)].slice(0, 10)
         setHistory(newHistory)
         window.api.setSetting(`promptHistory_${currentCanvasId}`, JSON.stringify(newHistory))
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error('[optimize]', msg)
-      if (msg === 'API key not configured') {
+      // O erro cruza o IPC embrulhado ("Error invoking remote method '...': Error: X"),
+      // então usamos includes(). Sem chave, o app cai na IA local (Ollama); se ela não
+      // estiver rodando, vem LOCAL_AI_UNAVAILABLE → orientamos a instalar/abrir o Ollama.
+      if (msg.includes('LOCAL_AI_UNAVAILABLE')) {
         pendingModelRef.current = modelId
         setTargetModel(null)
-        window.dispatchEvent(new CustomEvent('open-settings'))
+        setSetupHint('A otimização falhou, clique aqui para configurar a IA')
+      } else if (msg.includes('API key not configured')) {
+        pendingModelRef.current = modelId
+        setTargetModel(null)
+        setSetupHint('Para aprimorar um prompt configure sua API')
       } else {
-        setOptimizeError(`Erro: ${msg}`)
-        setTimeout(() => setOptimizeError(null), 6000)
+        // Qualquer outra falha → CTA clicável que leva às configurações da IA
+        // (o erro técnico fica no console para depuração).
+        pendingModelRef.current = modelId
+        setTargetModel(null)
+        setSetupHint('A otimização falhou, clique aqui para configurar a IA')
       }
     } finally {
       setOptimizing(false)
+      clearInterval(optTimerRef.current)
     }
   }
 
   handleSelectModelRef.current = handleSelectModel
 
   const count = promptTags.length
-  const negCount = negativeTags.length
-  const negVisible = showNegative || negCount > 0
-  const hasContent = count > 0 || inputText.trim().length > 0 || negCount > 0
+  const hasContent = count > 0 || inputText.trim().length > 0
 
   return (
     <div
@@ -914,10 +970,9 @@ export default function PromptBuilder() {
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
           >
-            {/* Chips positivos */}
+            {/* Chips do prompt */}
             {count > 0 && (
               <ChipZone
-                zone="positive"
                 tags={promptTags}
                 activeInsert={insertIndex}
                 setActiveInsert={setInsertIndex}
@@ -935,33 +990,6 @@ export default function PromptBuilder() {
                 placeholder="Escrever prompt..."
               />
             )}
-
-            {/* Zona negativa */}
-            {negVisible && (
-              <div className="mt-1.5 pt-2 border-t border-white/[0.06]">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="flex items-center gap-1.5 text-[9px] uppercase tracking-widest font-semibold text-red-400/60">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-500/60" /> Negativo
-                  </span>
-                  {negCount > 0 && (
-                    <button
-                      onClick={clearNegative}
-                      className="text-[10px] text-white/25 hover:text-white/60 transition-colors px-1.5 py-0.5 rounded"
-                    >
-                      Limpar
-                    </button>
-                  )}
-                </div>
-                <ChipZone
-                  zone="negative"
-                  tags={negativeTags}
-                  activeInsert={negInsertIndex}
-                  setActiveInsert={setNegInsertIndex}
-                  onInsert={(v, i) => insertNegativeAt(v, i)}
-                  emptyHint="Arraste tags aqui ou clique para adicionar…"
-                />
-              </div>
-            )}
           </DndContext>
 
           {/* Ações */}
@@ -970,26 +998,41 @@ export default function PromptBuilder() {
             <div ref={modelRef} className="relative">
               <button
                 ref={modelBtnRef}
-                disabled={!hasContent && !optimizeError}
+                disabled={!hasContent && !optimizeError && !setupHint}
                 onClick={() => {
+                  // Problema de configuração: o botão vira CTA e leva às configurações.
+                  // Some na hora ao clicar (se ainda houver problema, reaparece na próxima tentativa).
+                  if (setupHint) {
+                    setSetupHint(null)
+                    window.dispatchEvent(new CustomEvent('open-settings'))
+                    return
+                  }
                   if (!showModels && modelBtnRef.current) {
                     const r = modelBtnRef.current.getBoundingClientRect()
                     setDropdownPos({ x: r.left, y: r.top })
                   }
                   setShowModels(v => !v)
                 }}
-                className={`flex items-center gap-1.5 text-[11px] transition-colors px-2 py-1 rounded-md max-w-[200px] truncate ${
-                  !hasContent && !optimizeError
-                    ? 'text-white/15 cursor-not-allowed'
-                    : optimizeError
-                      ? 'text-red-400/70 hover:text-red-400 hover:bg-white/[0.06]'
-                      : 'text-white/40 hover:text-white/70 hover:bg-white/[0.06]'
+                className={`flex items-center gap-1.5 text-[11px] transition-colors px-2 py-1 rounded-md ${setupHint ? 'cursor-pointer' : 'max-w-[200px] truncate'} ${
+                  setupHint
+                    ? 'text-red-400/90 hover:text-red-300 bg-red-500/[0.12] hover:bg-red-500/[0.20]'
+                    : !hasContent && !optimizeError
+                      ? 'text-white/15 cursor-not-allowed'
+                      : optimizeError
+                        ? 'text-red-400/70 hover:text-red-400 hover:bg-white/[0.06]'
+                        : 'text-white/40 hover:text-white/70 hover:bg-white/[0.06]'
                 }`}
               >
-                <span>{optimizing ? 'Otimizando...' : optimizeError ?? (targetModel ? MODELS.find(m => m.id === targetModel)?.label : 'Otimizar para...')}</span>
-                <svg width="8" height="8" viewBox="0 0 10 6" fill="none">
-                  <path d={showModels ? 'M1 5L5 1L9 5' : 'M1 1L5 5L9 1'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
+                <span>{optimizing
+                  ? (optEstimate == null
+                      ? `Otimizando… ${optElapsed}s`
+                      : (optEstimate - optElapsed > 0 ? `Otimizando… restam ~${optEstimate - optElapsed}s` : 'Otimizando…'))
+                  : setupHint ? setupHint : (optimizeError ?? (targetModel ? MODELS.find(m => m.id === targetModel)?.label : 'Otimizar para...'))}</span>
+                {!setupHint && (
+                  <svg width="8" height="8" viewBox="0 0 10 6" fill="none">
+                    <path d={showModels ? 'M1 5L5 1L9 5' : 'M1 1L5 5L9 1'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                )}
               </button>
 
               {showModels && createPortal(
@@ -1041,18 +1084,7 @@ export default function PromptBuilder() {
             </div>
 
             <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowNegative(v => !v)}
-              title="Prompt negativo"
-              className={`text-[11px] px-2 py-0.5 rounded-md transition-colors shrink-0 ${
-                negVisible
-                  ? 'text-red-300/80 bg-red-500/[0.12] hover:bg-red-500/[0.18]'
-                  : 'text-white/30 hover:text-white/65 hover:bg-white/[0.06]'
-              }`}
-            >
-              Negativo
-            </button>
-            {hasOpenAIKey && <MicButton onTranscript={text => setInputText(prev => prev ? prev + ' ' + text : text)} />}
+            <MicButton hasCloudKey={hasOpenAIKey} onTranscript={text => setInputText(prev => prev ? prev + ' ' + text : text)} />
             {hasContent && (
               <button
                 onClick={handleTranslatePrompt}
@@ -1145,14 +1177,27 @@ export default function PromptBuilder() {
                       <button
                         key={i}
                         onClick={() => { navigator.clipboard.writeText(h.text); setCopied(true); setTimeout(() => setCopied(false), 1500); setShowHistory(false) }}
+                        onContextMenu={e => {
+                          e.preventDefault()
+                          if (!h.source) return
+                          clearAll()
+                          setInputText(h.source)
+                          setTargetModel(null)
+                          setPromptTranslated(false)
+                          preTranslateRef.current = null
+                          setShowHistory(false)
+                          setHoverHistory(null)
+                        }}
                         onMouseEnter={e => {
                           cancelHistoryHide()
                           const r = e.currentTarget.getBoundingClientRect()
                           const W = 300
-                          const left = r.right + 8 + W > window.innerWidth ? r.left - 8 - W : r.right + 8
+                          // Sempre à direita; só limita pra não sair da tela.
+                          const left = Math.min(r.right + 8, window.innerWidth - W - 8)
                           setHoverHistory({ idx: i, left, bottom: window.innerHeight - r.bottom })
                         }}
                         onMouseLeave={scheduleHistoryHide}
+                        title={h.source ? 'Clique: copiar · Botão direito: restaurar o prompt original' : 'Clique para copiar'}
                         className="group flex items-center gap-2 text-left text-[11px] text-white/45 hover:text-white/75 hover:bg-white/[0.04] rounded-lg px-2 py-1 transition-colors shrink-0"
                       >
                         <span className="truncate flex-1 min-w-0">{h.text}</span>
@@ -1188,6 +1233,14 @@ export default function PromptBuilder() {
           <div className="text-[11px] leading-relaxed text-white/70 whitespace-pre-wrap max-h-[240px] overflow-y-auto" data-scrollable>
             {history[hoverHistory.idx].text}
           </div>
+          {history[hoverHistory.idx].source && (
+            <div className="mt-2 pt-2 border-t border-white/[0.08]">
+              <div className="mb-1 text-[9px] uppercase tracking-widest font-semibold text-white/35">Original — botão direito p/ restaurar</div>
+              <div className="text-[11px] leading-relaxed text-white/50 whitespace-pre-wrap max-h-[140px] overflow-y-auto" data-scrollable>
+                {history[hoverHistory.idx].source}
+              </div>
+            </div>
+          )}
         </div>,
         document.body
       )}

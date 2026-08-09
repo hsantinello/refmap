@@ -47,6 +47,9 @@ export interface ImageNodeData extends Record<string, unknown> {
   comfyParams?: ComfyParams
   linkedImageNodeId?: string
   isMetadataNode?: boolean
+  // Vídeo: se presente, o nó representa um vídeo e agrupa todas as suas cenas.
+  videoScenes?: string[]
+  videoName?: string
 }
 
 export interface PromptTag {
@@ -95,7 +98,6 @@ interface CanvasStore {
 
 interface PromptBuilderStore {
   promptTags: PromptTag[]
-  negativeTags: PromptTag[]
   setPromptTags: (tags: PromptTag[]) => void
   addTag: (tag: Tag, sourceNodeId: string) => void
   insertTagAt: (value: string, index: number) => void
@@ -104,28 +106,10 @@ interface PromptBuilderStore {
   hasTag: (tagValue: string) => boolean
   reorderTags: (from: number, to: number) => void
   updateTagText: (tagId: string, text: string) => void
-  // Pesos (funciona em qualquer zona — busca por id)
   setTagWeight: (tagId: string, weight: number) => void
-  // Zona negativa
-  insertNegativeAt: (value: string, index: number) => void
-  removeNegativeTag: (tagId: string) => void
-  reorderNegativeTags: (from: number, to: number) => void
-  updateNegativeTagText: (tagId: string, text: string) => void
-  setNegativeFromString: (text: string) => void
-  // Mover chip entre zonas
-  moveToNegative: (tagId: string, index?: number) => void
-  moveToPositive: (tagId: string, index?: number) => void
   clearAll: () => void
-  clearNegative: () => void
   getPromptString: () => string
-  getNegativeString: () => string
 }
-
-// Divide uma string em chips (split por vírgula/quebra de linha, sem vazios).
-const stringToTags = (text: string): PromptTag[] =>
-  text.split(/[,\n]/).map(s => s.trim()).filter(Boolean).map(value => ({
-    id: uuid(), value, category: 'description', sourceNodeId: 'manual',
-  }))
 
 export const useCanvasStore = create<CanvasStore>((set, get) => ({
   nodes: [],
@@ -218,7 +202,6 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
 
 export const usePromptStore = create<PromptBuilderStore>((set, get) => ({
   promptTags: [],
-  negativeTags: [],
 
   setPromptTags: (tags) => set({ promptTags: tags }),
 
@@ -275,69 +258,12 @@ export const usePromptStore = create<PromptBuilderStore>((set, get) => ({
     }))
   },
 
-  // Peso: busca o id nas duas zonas (ids são uuid únicos).
   setTagWeight: (tagId, weight) => {
     const w = clampWeight(weight)
-    const map = (arr: PromptTag[]) => arr.map(t => t.id === tagId ? { ...t, weight: w } : t)
-    set(state => ({ promptTags: map(state.promptTags), negativeTags: map(state.negativeTags) }))
-  },
-
-  // ── Zona negativa ─────────────────────────────────────────────────────────
-  insertNegativeAt: (value, index) => {
-    const chips = stringToTags(value) // permite colar "worst quality, blurry" de uma vez
-    if (!chips.length) return
-    set(state => {
-      const tags = [...state.negativeTags]
-      tags.splice(index, 0, ...chips)
-      return { negativeTags: tags }
-    })
-  },
-
-  removeNegativeTag: (tagId) => {
-    set(state => ({ negativeTags: state.negativeTags.filter(t => t.id !== tagId) }))
-  },
-
-  reorderNegativeTags: (from, to) => {
-    set(state => {
-      const tags = [...state.negativeTags]
-      const [moved] = tags.splice(from, 1)
-      tags.splice(to, 0, moved)
-      return { negativeTags: tags }
-    })
-  },
-
-  updateNegativeTagText: (tagId, text) => {
-    set(state => ({
-      negativeTags: state.negativeTags.map(t => t.id === tagId ? { ...t, value: text } : t),
-    }))
-  },
-
-  setNegativeFromString: (text) => set({ negativeTags: stringToTags(text) }),
-
-  // ── Mover chip entre zonas (preserva peso) ────────────────────────────────
-  moveToNegative: (tagId, index) => {
-    set(state => {
-      const tag = state.promptTags.find(t => t.id === tagId)
-      if (!tag) return {}
-      const neg = [...state.negativeTags]
-      neg.splice(index ?? neg.length, 0, tag)
-      return { promptTags: state.promptTags.filter(t => t.id !== tagId), negativeTags: neg }
-    })
-  },
-
-  moveToPositive: (tagId, index) => {
-    set(state => {
-      const tag = state.negativeTags.find(t => t.id === tagId)
-      if (!tag) return {}
-      const pos = [...state.promptTags]
-      pos.splice(index ?? pos.length, 0, tag)
-      return { negativeTags: state.negativeTags.filter(t => t.id !== tagId), promptTags: pos }
-    })
+    set(state => ({ promptTags: state.promptTags.map(t => t.id === tagId ? { ...t, weight: w } : t) }))
   },
 
   clearAll: () => set({ promptTags: [] }),
-  clearNegative: () => set({ negativeTags: [] }),
 
   getPromptString: () => get().promptTags.map(serializeTag).join(', '),
-  getNegativeString: () => get().negativeTags.map(serializeTag).join(', '),
 }))

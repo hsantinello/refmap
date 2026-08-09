@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { AnimatePresence } from 'framer-motion'
 import { type Session } from '@supabase/supabase-js'
 import logoUrl from './assets/logo.png'
 import TopBar from './components/TopBar'
@@ -9,6 +10,8 @@ import Onboarding from './components/Onboarding'
 import About from './components/About'
 import Auth from './components/Auth'
 import UpdateBanner from './components/UpdateBanner'
+import LocalInstallBanner, { type LocalInstallProgress } from './components/LocalInstallBanner'
+import { ensureWhisper, isWhisperReady } from './lib/localWhisper'
 import { useCanvasStore, usePromptStore } from './store'
 import { supabase, isLicenseActive } from './lib/supabase'
 
@@ -20,6 +23,59 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [hasApiKey, setHasApiKey] = useState(false)
   const [apiProviderName, setApiProviderName] = useState('')
+  const [localOk, setLocalOk] = useState(false)
+  const [localModel, setLocalModel] = useState('')
+  const [settingsView, setSettingsView] = useState<'choose' | 'api' | 'local'>('choose')
+  const [installProgress, setInstallProgress] = useState<LocalInstallProgress | null>(null)
+
+  // Dispara a instalação da IA local. O progresso vem por evento e é tratado no
+  // effect abaixo (vive no App → persiste mesmo com as Settings fechadas).
+  // Ao terminar o Ollama (fase 'done'), o effect encadeia o download do modelo de voz.
+  const startLocalInstall = () => {
+    setInstallProgress({ phase: 'checking', percent: -1, message: 'Iniciando…' })
+    window.api.installLocalAI().catch(() => {})
+  }
+
+  // Baixa o modelo de transcrição (Whisper, ~250MB) no renderer, mostrando o progresso
+  // na mesma barra da IA local — assim o "Baixar" traz texto + voz de uma vez só.
+  const downloadWhisperModel = async () => {
+    if (isWhisperReady()) {
+      setInstallProgress({ phase: 'done', percent: 100, message: 'Pronto' })
+      setTimeout(() => setInstallProgress(null), 2500)
+      return
+    }
+    const files = new Map<string, { loaded: number; total: number }>()
+    setInstallProgress({ phase: 'downloading', percent: -1, message: 'Baixando modelo de voz' })
+    try {
+      await ensureWhisper(p => {
+        if (p.file && typeof p.total === 'number') {
+          const loaded = p.status === 'done' ? p.total : (typeof p.loaded === 'number' ? p.loaded : 0)
+          files.set(p.file, { loaded, total: p.total })
+        }
+        let l = 0, t = 0
+        for (const f of files.values()) { l += f.loaded; t += f.total }
+        const percent = t > 0 ? Math.min(99, Math.round((l / t) * 100)) : -1
+        setInstallProgress({ phase: 'downloading', percent, message: 'Baixando modelo de voz' })
+      })
+      setInstallProgress({ phase: 'done', percent: 100, message: 'Pronto' })
+    } catch {
+      // Whisper falhou, mas a IA local de texto já instalou — não trava o fluxo.
+      setInstallProgress({ phase: 'done', percent: 100, message: 'IA local pronta' })
+    }
+    setTimeout(() => setInstallProgress(null), 2500)
+  }
+
+  const startLocalUninstall = () => {
+    setInstallProgress({ phase: 'uninstalling', percent: -1, message: 'Desinstalando o Ollama…' })
+    window.api.uninstallLocalAI().catch(() => {})
+  }
+  // Primeira execução: abre a tela de escolha (Local vs API) antes do tutorial.
+  const firstRunAiRef = useRef(false)
+
+  const openSettings = (view: 'choose' | 'api' | 'local' = 'choose') => {
+    setSettingsView(view)
+    setShowSettings(true)
+  }
 
   const setCanvasList      = useCanvasStore(s => s.setCanvasList)
   const setCurrentCanvasId = useCanvasStore(s => s.setCurrentCanvasId)
@@ -27,11 +83,33 @@ export default function App() {
   const currentCanvasId    = useCanvasStore(s => s.currentCanvasId)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session))
+    let mounted = true
+    // No boot, VALIDA de verdade a sessão guardada. O clássico "Invalid Refresh Token:
+    // Refresh Token Not Found" acontece quando sobra uma sessão podre no disco: ao tentar
+    // se renovar no fundo, ela dispara um SIGNED_OUT que atropela um login novo (era isso
+    // que derrubava o "Entrar"). Então: se getUser falhar, a sessão é inválida → limpamos
+    // ANTES de qualquer login, pra ela não ter como interferir.
+    ;(async () => {
+      try {
+        const { data } = await supabase.auth.getSession()
+        if (data.session) {
+          const { error } = await supabase.auth.getUser()
+          if (error) {
+            await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+            if (mounted) setSession(null)
+            return
+          }
+        }
+        if (mounted) setSession(data.session)
+      } catch {
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+        if (mounted) setSession(null)
+      }
+    })()
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
+      if (mounted) setSession(session)
     })
-    return () => subscription.unsubscribe()
+    return () => { mounted = false; subscription.unsubscribe() }
   }, [])
 
   // Revalida a licença: se o e-mail do usuário sair da tabela `licenses`, desloga.
@@ -62,9 +140,45 @@ export default function App() {
 
   // Open settings from anywhere via custom event
   useEffect(() => {
-    const handler = () => setShowSettings(true)
+    const handler = () => { setSettingsView('choose'); setShowSettings(true) }
     window.addEventListener('open-settings', handler)
     return () => window.removeEventListener('open-settings', handler)
+  }, [])
+
+  // Status da IA local (Ollama). Revalida ao mudar a chave, ao focar a janela e
+  // a cada 20s — assim, se o Ollama for desinstalado/parado com o app aberto, o
+  // pill volta para "Configure seu Ref Map" em vez de continuar mostrando "IA Local".
+  useEffect(() => {
+    const check = () => window.api.getLocalStatus()
+      .then(s => { setLocalOk(s.ok); setLocalModel(s.model) })
+      .catch(() => setLocalOk(false))
+    check()
+    const interval = setInterval(check, 20_000)
+    window.addEventListener('apikey-changed', check)
+    window.addEventListener('focus', check)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('apikey-changed', check)
+      window.removeEventListener('focus', check)
+    }
+  }, [])
+
+  // Progresso da instalação da IA local — escutado no App para persistir na barra
+  // do topo mesmo quando a janela de Settings é fechada.
+  useEffect(() => {
+    const off = window.api.onLocalInstallProgress(p => {
+      if (p.phase === 'done') {
+        window.dispatchEvent(new CustomEvent('apikey-changed')) // atualiza status/pill
+        // IA de texto pronta → segue baixando o modelo de voz na mesma barra.
+        downloadWhisperModel()
+        return
+      }
+      setInstallProgress(p)
+      if (p.phase === 'error') {
+        setTimeout(() => setInstallProgress(null), 6000)
+      }
+    })
+    return () => { off() }
   }, [])
 
   // Auto-save prompt tags whenever they change
@@ -107,15 +221,32 @@ export default function App() {
     await supabase.auth.signOut()
   }
 
+  const handleCloseSettings = async () => {
+    setShowSettings(false)
+    // Se era a tela de escolha da primeira execução: marca como escolhido e,
+    // em seguida, mostra o tutorial (se ainda não foi visto).
+    if (firstRunAiRef.current) {
+      firstRunAiRef.current = false
+      await window.api.setSetting('aiModeChosen', 'true')
+      const onboardingDone = await window.api.getSetting('onboardingCompleted')
+      if (!onboardingDone) setShowOnboarding(true)
+    }
+  }
+
   useEffect(() => {
     const init = async () => {
       // Restore app language preference
       const lang = await window.api.getSetting('appLang')
       useCanvasStore.getState().setAppLang(lang === 'pt' ? 'pt' : 'en')
 
-      // Check onboarding
+      // Primeira execução: mostra a tela "Como deseja usar o app?" (Local vs API)
+      // ANTES do tutorial. O tutorial é disparado quando essa escolha é fechada.
       const onboardingDone = await window.api.getSetting('onboardingCompleted')
-      if (!onboardingDone) {
+      const aiModeChosen = await window.api.getSetting('aiModeChosen')
+      if (!aiModeChosen) {
+        firstRunAiRef.current = true
+        setShowSettings(true)
+      } else if (!onboardingDone) {
         setShowOnboarding(true)
       }
 
@@ -155,23 +286,30 @@ export default function App() {
         const imageDbNodes = nodes.filter(n => n.node_type !== 'group' && n.node_type !== 'metadata')
         const metadataDbNodes = nodes.filter(n => n.node_type === 'metadata')
 
-        const groupFlowNodes = groupDbNodes.map(n => ({
-          id: n.id,
-          type: 'groupNode' as const,
-          position: { x: n.position_x, y: n.position_y },
-          style: { width: n.width, height: n.height },
-          data: {
-            imagePath: '',
-            tags: [] as { id: string; category: 'style'; value: string; source: 'metadata' }[],
-            metadataSource: 'group' as const,
-            isPending: false,
-            isError: false,
-            canvasId: targetId,
-            isGroup: true,
-            label: 'Grupo',
-            modelName: n.model_name ?? undefined, // stores saved group color (#rrggbb)
-          },
-        }))
+        const groupFlowNodes = groupDbNodes.map(n => {
+          // Nome do grupo persistido em comfy_params ({ label }); fallback 'Grupo'.
+          let groupLabel = 'Grupo'
+          if (n.comfy_params) {
+            try { groupLabel = (JSON.parse(n.comfy_params) as { label?: string }).label || 'Grupo' } catch { /* ignore */ }
+          }
+          return {
+            id: n.id,
+            type: 'groupNode' as const,
+            position: { x: n.position_x, y: n.position_y },
+            style: { width: n.width, height: n.height },
+            data: {
+              imagePath: '',
+              tags: [] as { id: string; category: 'style'; value: string; source: 'metadata' }[],
+              metadataSource: 'group' as const,
+              isPending: false,
+              isError: false,
+              canvasId: targetId,
+              isGroup: true,
+              label: groupLabel,
+              modelName: n.model_name ?? undefined, // stores saved group color (#rrggbb)
+            },
+          }
+        })
 
         const imageFlowNodes = imageDbNodes.map((n, i) => ({
           id: n.id,
@@ -304,22 +442,32 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'radial-gradient(ellipse at 50% 40%, #1a0a0e 0%, #0d0407 50%, #080305 100%)' }} onContextMenu={e => e.preventDefault()}>
       <TopBar
-        onOpenSettings={() => setShowSettings(true)}
+        onOpenSettings={openSettings}
         onOpenAbout={() => setShowAbout(true)}
         onOpenTutorial={() => setShowOnboarding(true)}
         hasApiKey={hasApiKey}
         apiProviderName={apiProviderName}
+        localActive={!hasApiKey && localOk}
+        localModel={localModel}
         onRemoveApiKey={handleRemoveApiKey}
         onSignOut={handleSignOut}
       />
 
-      <UpdateBanner />
       <div className="flex-1 overflow-hidden relative flex flex-col px-3 pb-3">
         <PixiCanvas canvasId={currentCanvasId ?? ''} />
         <PromptBuilder />
       </div>
 
-      {showSettings && <Settings onClose={() => setShowSettings(false)} onKeySaved={handleKeySaved} />}
+      {/* Banners flutuantes — alinhados à barra de ferramentas do canvas
+          (Snap/Buscar/zoom ficam em top-3, ~44px abaixo do TopBar de 32px). */}
+      <div className="fixed top-[44px] left-1/2 -translate-x-1/2 z-40 flex flex-col items-center gap-2 pointer-events-none">
+        <UpdateBanner />
+        <AnimatePresence>
+          {installProgress && !showSettings && <LocalInstallBanner progress={installProgress} />}
+        </AnimatePresence>
+      </div>
+
+      {showSettings && <Settings onClose={handleCloseSettings} onKeySaved={handleKeySaved} initialView={settingsView} installProgress={installProgress} onInstallLocal={startLocalInstall} onUninstallLocal={startLocalUninstall} />}
       {showAbout && <About onClose={() => setShowAbout(false)} />}
       {showOnboarding && <Onboarding onComplete={() => setShowOnboarding(false)} />}
     </div>

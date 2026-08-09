@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Application, Container, Graphics, Sprite, Texture, ImageSource, BlurFilter } from 'pixi.js'
+import { tagExampleUrl } from '../../lib/tagExamples'
 import { useCanvasStore, usePromptStore, type ImageNodeData, type Tag, type ComfyParams } from '../../store'
 import { useShallow } from 'zustand/react/shallow'
 import { v4 as uuid } from 'uuid'
 import PromptPresets from '../PromptPresets'
+import VideoSceneImport from '../VideoSceneImport'
+import VideoTrimModal from '../VideoTrimModal'
+import { recordDuration, getEstimateSeconds } from '../../lib/estimate'
 
 // ─── busca: normalização + sinônimos/hiperônimos bilíngues (PT↔EN) ───────────
 // Compara sem acento e sem caixa ("cão" == "cao", "Gato" == "gato").
@@ -81,6 +86,10 @@ interface PixiNode {
   imgLoadStarted?: boolean     // lazy loading: true once texture load has been initiated
   locked?: boolean             // lock prevents drag/resize
   lastSeenAt?: number          // ticker timestamp of last in-viewport frame (for eviction)
+  selAnim?: number             // 0→1 progresso da animação de seleção (fade-in do halo)
+  // Crop: frações (0..1) recortadas de cada lado do sprite (invariantes ao zoom/resize).
+  cfL?: number; cfR?: number; cfT?: number; cfB?: number
+  cropMask?: Graphics | null   // máscara que clipa o sprite à área visível quando recortado
 }
 
 // ─── NSFW detection ───────────────────────────────────────────────────────────
@@ -152,6 +161,25 @@ function loadTexture(path: string): Promise<{ texture: Texture; w: number; h: nu
   })
 }
 
+// Remove tags redundantes: idênticas e as que aparecem como FRASE COMPLETA (palavras
+// inteiras) dentro de outra mais específica — some "200SX" ou "Nissan" quando já existe
+// "white Nissan 200SX", mas mantém genéricos como "car" (que não aparecem no nome).
+function dedupeTags(tags: Tag[]): Tag[] {
+  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim()
+  const contains = (haystack: string, needle: string) => (' ' + haystack + ' ').includes(' ' + needle + ' ')
+  const order = new Map(tags.map((t, i) => [t.id, i]))
+  const kept: Tag[] = []
+  const keptNorm: string[] = []
+  // Processa da mais longa para a mais curta, mantendo a versão mais específica.
+  for (const t of [...tags].sort((a, b) => b.value.length - a.value.length)) {
+    const n = norm(t.value)
+    if (!n || keptNorm.includes(n)) continue
+    if (keptNorm.some(k => contains(k, n))) continue
+    kept.push(t); keptNorm.push(n)
+  }
+  return kept.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+}
+
 function parseDescriptionToTags(desc: unknown, src: 'metadata' | 'ai'): Tag[] {
   if (!desc || typeof desc !== 'string') return []
   const trimmed = desc.trim()
@@ -166,7 +194,7 @@ function parseDescriptionToTags(desc: unknown, src: 'metadata' | 'ai'): Tag[] {
       jm[1].split(',').map(s => s.trim()).filter(s => s.length > 1).forEach(v => vals.push(v))
     }
     if (vals.length > 0)
-      return vals.map(v => ({ id: uuid(), category: 'description' as const, value: v, source: src }))
+      return dedupeTags(vals.map(v => ({ id: uuid(), category: 'description' as const, value: v, source: src })))
   }
 
   // {chunk}[chunk] format — AI vision analysis output
@@ -174,11 +202,11 @@ function parseDescriptionToTags(desc: unknown, src: 'metadata' | 'ai'): Tag[] {
   const chunks: string[] = []
   let m
   while ((m = rx.exec(desc)) !== null) { const v = (m[1] ?? m[2]).trim(); if (v) chunks.push(v) }
-  if (chunks.length > 0) return chunks.map(v => ({ id: uuid(), category: 'description' as const, value: v, source: src }))
+  if (chunks.length > 0) return dedupeTags(chunks.map(v => ({ id: uuid(), category: 'description' as const, value: v, source: src })))
 
   // Plain comma-separated fallback
-  return desc.split(',').map(s => s.trim()).filter(s => s.length > 1)
-    .map(v => ({ id: uuid(), category: 'description' as const, value: v, source: src }))
+  return dedupeTags(desc.split(',').map(s => s.trim()).filter(s => s.length > 1)
+    .map(v => ({ id: uuid(), category: 'description' as const, value: v, source: src })))
 }
 
 const GRP_COL = 0xfb923c
@@ -202,12 +230,63 @@ function redrawBg(node: PixiNode, worldScale = 1) {
   } else {
     bg.roundRect(0, 0, width, height, NODE_R).fill({ color: 0x000000, alpha: 0 })
   }
-  if (selected) {
-    // Fixed 1.5px on screen at all zoom levels — matches the metadata node's CSS border
-    const sw = 1.5 / worldScale
-    bg.roundRect(sw * 0.5, sw * 0.5, width - sw, height - sw, NODE_R)
-      .stroke({ color: SEL_COL, width: sw, alpha: 0.9 })
+  // t = progresso animado da seleção (0→1). Usa selAnim se estiver animando,
+  // senão cai no estado final (selecionado = 1). Permite fade-in/out suave.
+  const t = node.selAnim ?? (selected ? 1 : 0)
+  if (t > 0.001) {
+    // Tudo em px de tela (÷ worldScale) → aparência idêntica em qualquer zoom.
+    const g = (px: number) => px / worldScale
+    // Raio DA IMAGEM (a máscara do sprite usa 10) — a borda precisa desse raio
+    // pra acompanhar os cantos, senão fica desalinhada nos cantos.
+    const IMG_R = 10
+
+    // Glow externo suave: várias camadas finas sobrepostas, expandindo pra fora,
+    // com queda QUADRÁTICA de alpha. Muitas camadas próximas fundem num degradê
+    // contínuo — sem faixas/transição brusca de cor (o "pop" vem do reach × t).
+    const reach = g(13) * (0.75 + 0.25 * t)
+    const LAYERS = 12
+    for (let i = 1; i <= LAYERS; i++) {
+      const f = i / LAYERS               // 0 (interno) → 1 (externo)
+      const off = reach * f
+      const a = 0.08 * (1 - f) * (1 - f) * t
+      bg.roundRect(-off, -off, width + off * 2, height + off * 2, IMG_R + off)
+        .stroke({ color: SEL_COL, width: g(2), alpha: a })
+    }
+
+    // Borda nítida por cima, alinhada aos cantos da imagem.
+    const sw = g(2)
+    bg.roundRect(sw * 0.5, sw * 0.5, width - sw, height - sw, IMG_R)
+      .stroke({ color: SEL_COL, width: sw, alpha: 0.92 * t })
   }
+}
+
+// Aplica o crop ao sprite: o sprite mantém o tamanho CHEIO e é deslocado + mascarado
+// para mostrar só a área visível. node.width/height passam a ser a área visível.
+function applyCrop(node: PixiNode, worldScale = 1) {
+  const spr = node.sprite, c = node.container
+  if (!spr || !c) return
+  const fl = node.cfL ?? 0, fr = node.cfR ?? 0, ft = node.cfT ?? 0, fb = node.cfB ?? 0
+  const fullW = spr.width, fullH = spr.height
+  const lpx = fl * fullW, tpx = ft * fullH
+  const visW = fullW * (1 - fl - fr)
+  const visH = fullH * (1 - ft - fb)
+  spr.x = -lpx; spr.y = -tpx
+  node.width = visW; node.height = visH
+  const cropped = fl > 0.0005 || fr > 0.0005 || ft > 0.0005 || fb > 0.0005
+  if (cropped) {
+    if (!node.cropMask) {
+      // Atrás de tudo: se por acaso a máscara renderizar, fica escondida pelo sprite.
+      node.cropMask = new Graphics()
+      c.addChildAt(node.cropMask, 0)
+    }
+    node.cropMask.visible = true
+    node.cropMask.clear().roundRect(0, 0, visW, visH, NODE_R).fill(0xffffff)
+    if (spr.mask !== node.cropMask) spr.mask = node.cropMask  // atribui só quando muda
+  } else {
+    if (spr.mask === node.cropMask) spr.mask = node.blurMask ?? null
+    if (node.cropMask) node.cropMask.visible = false
+  }
+  redrawBg(node, worldScale)
 }
 
 // ─── tags panel ───────────────────────────────────────────────────────────────
@@ -296,6 +375,23 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
   const [copiedTags, setCopiedTags] = useState(false)
   const [translatedMap, setTranslatedMap] = useState<Record<string, string> | null>(null)
   const [translating, setTranslating] = useState(false)
+  // Prévia ao passar o mouse numa tag que tem imagem de exemplo (mesmo recurso
+  // do PromptPresets). Aparece ao lado da tag, via portal no body.
+  const [hoverImg, setHoverImg] = useState<{ url: string; top: number; left: number } | null>(null)
+  const hoverHideRef = useRef<number | null>(null)
+  const cancelHoverHide = () => { if (hoverHideRef.current) { clearTimeout(hoverHideRef.current); hoverHideRef.current = null } }
+  const scheduleHoverHide = () => { cancelHoverHide(); hoverHideRef.current = window.setTimeout(() => setHoverImg(null), 120) }
+  const PREVIEW_W = 200
+  const showTagPreview = (value: string, el: HTMLElement) => {
+    const url = tagExampleUrl(value)
+    if (!url) return
+    cancelHoverHide()
+    const r = el.getBoundingClientRect()
+    const right = r.right + 10
+    const left = right + PREVIEW_W > window.innerWidth ? r.left - PREVIEW_W - 10 : right
+    const top = Math.max(8, Math.min(r.top - 8, window.innerHeight - 300))
+    setHoverImg({ url, left, top })
+  }
 
   useEffect(() => {
     if (!data.imagePath) return
@@ -424,13 +520,25 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
         {tags.map(tag => {
           const displayValue = translatedMap?.[tag.id] ?? tag.value
           const active = promptTags.some(pt => pt.value === displayValue)
+          const hasPreview = !!tagExampleUrl(tag.value)
           return (
             <button key={tag.id}
               onClick={e => { e.stopPropagation(); toggleTag({ ...tag, value: displayValue }, nodeId) }}
               onContextMenu={e => { e.preventDefault(); e.stopPropagation(); window.dispatchEvent(new CustomEvent('save-to-my-presets', { detail: { value: displayValue } })) }}
-              className={`rm-chip ${active ? 'is-active' : ''}`}
-              title={active ? 'Remover do builder' : 'Adicionar ao builder'}
-            >{displayValue}</button>
+              onMouseEnter={e => hasPreview && showTagPreview(tag.value, e.currentTarget)}
+              onMouseLeave={scheduleHoverHide}
+              className={`rm-chip ${active ? 'is-active' : ''} ${hasPreview ? 'inline-flex items-center gap-1' : ''}`}
+              title={hasPreview ? 'Passe o mouse para ver o exemplo' : (active ? 'Remover do builder' : 'Adicionar ao builder')}
+            >
+              {hasPreview && (
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" className="shrink-0 opacity-60">
+                  <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" />
+                  <circle cx="8.5" cy="8.5" r="1.6" fill="currentColor" />
+                  <path d="M21 15l-5-5L5 21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              )}
+              <span>{displayValue}</span>
+            </button>
           )
         })}
       </div>
@@ -438,8 +546,8 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
   )
 
   return (
-    <div className="flex flex-col gap-2 bg-[#111111] rounded-2xl border border-white/[0.08] p-3 shadow-2xl" style={{ width: 260 }}>
-      <div className="flex items-center justify-between">
+    <div className="rm-tagspanel flex flex-col gap-2 bg-[#111111] rounded-2xl border border-white/[0.08] p-3 shadow-2xl" style={{ width: 260 }}>
+      <div className="flex items-center justify-between gap-1">
         {badge ? (
           <button
             onClick={e => {
@@ -454,13 +562,13 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
             }}
             disabled={data.isPending}
             title="Reanalisar com IA"
-            className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 border whitespace-nowrap transition-all hover:brightness-125 disabled:opacity-50 disabled:cursor-default cursor-pointer ${badge.cls}`}
+            className={`min-w-0 overflow-hidden inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 border whitespace-nowrap transition-all hover:brightness-125 disabled:opacity-50 disabled:cursor-default cursor-pointer ${badge.cls}`}
           >
-            <span className="text-[10px] leading-none">{badge.icon}</span>
-            <span className="text-[10px] font-medium leading-none">{badge.label}</span>
+            <span className="text-[10px] leading-none shrink-0">{badge.icon}</span>
+            <span className="text-[10px] font-medium leading-none truncate">{badge.label}</span>
           </button>
-        ) : <div />}
-        <div className="flex items-center gap-1">
+        ) : <div className="min-w-0 flex-1" />}
+        <div className="flex items-center gap-1 shrink-0">
           {data.tags.length > 0 && (
             <>
               <button
@@ -565,14 +673,32 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
           </div>
         </div>
       )}
-      {primaryGroups.map(renderGroup)}
-      {mixed && (
-        <div className="flex flex-col gap-1.5 pt-1.5 mt-0.5 border-t border-white/[0.08]">
-          <span className="inline-flex items-center gap-1 text-[9px] uppercase tracking-widest text-orange-300/60 font-semibold leading-none">
-            <span className="text-[10px]">✨</span><span>Analisado por IA</span>
-          </span>
-          {aiGroups.map(renderGroup)}
-        </div>
+      {/* Tags — altura máx. (~10 linhas) com rolagem quando a descrição é longa */}
+      <div data-scrollable className="flex flex-col gap-2 max-h-[300px] overflow-y-auto overflow-x-hidden pr-1 rm-tags-scroll">
+        {primaryGroups.map(renderGroup)}
+        {mixed && (
+          <div className="flex flex-col gap-1.5 pt-1.5 mt-0.5 border-t border-white/[0.08]">
+            <span className="inline-flex items-center gap-1 text-[9px] uppercase tracking-widest text-orange-300/60 font-semibold leading-none">
+              <span className="text-[10px]">✨</span><span>Analisado por IA</span>
+            </span>
+            {aiGroups.map(renderGroup)}
+          </div>
+        )}
+      </div>
+
+      {/* Prévia da imagem de exemplo ao passar o mouse numa tag — portal no body */}
+      {hoverImg && createPortal(
+        <div
+          className="fixed z-[60] pointer-events-none rounded-xl overflow-hidden"
+          style={{
+            left: hoverImg.left, top: hoverImg.top, width: PREVIEW_W,
+            background: '#0d0d0f', border: '1px solid rgba(255,255,255,0.12)',
+            boxShadow: '0 16px 44px rgba(0,0,0,0.65)',
+          }}
+        >
+          <img src={hoverImg.url} className="w-full h-auto block" alt="" draggable={false} />
+        </div>,
+        document.body,
       )}
     </div>
   )
@@ -603,6 +729,28 @@ function CanvasToolbar({ zoom, onZoomIn, onZoomOut, onFit }: {
 
 function MetadataNodeView({ data, selected }: { data: ImageNodeData; selected: boolean }) {
   const p = (data.comfyParams ?? {}) as ComfyParams
+  // Card de PROMPT DE ANIMAÇÃO (entre duas imagens first/last) — texto livre.
+  const promptText = (data.comfyParams as { _promptText?: string } | undefined)?._promptText
+  if (promptText) {
+    return (
+      <div className="rounded-2xl overflow-hidden shadow-xl" style={{
+        width: 260, background: 'rgba(10,6,14,0.92)',
+        border: selected ? '1px solid rgba(251,146,60,0.7)' : '1px solid rgba(249,115,22,0.25)',
+        boxShadow: selected ? '0 0 0 3px rgba(251,146,60,0.25),0 8px 32px rgba(0,0,0,0.8)' : '0 8px 32px rgba(0,0,0,0.6)',
+        backdropFilter: 'blur(8px)',
+      }}>
+        <div className="flex items-center gap-2 px-3.5 py-2.5" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#F97316" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+          <span className="text-[9px] font-bold tracking-widest uppercase text-white/30">Prompt de animação</span>
+          <button
+            onClick={() => navigator.clipboard.writeText(promptText)}
+            className="ml-auto text-[9px] uppercase tracking-wider text-white/30 hover:text-orange-400 transition-colors cursor-pointer"
+          >copiar</button>
+        </div>
+        <div className="px-3.5 py-3 text-[11px] text-white/70 leading-relaxed max-h-[220px] overflow-y-auto whitespace-pre-wrap" data-scrollable>{promptText}</div>
+      </div>
+    )
+  }
   const baseName = p.model ? p.model.replace(/.*[/\\]/, '').replace(/\.[^.]+$/, '') : null
   const hasModels   = baseName || (p.loras && p.loras.length > 0)
   const hasSampling = p.sampler || p.scheduler || p.steps !== undefined || p.seed !== undefined ||
@@ -675,12 +823,57 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   const minimapDragging = useRef(false)
   const snapGuideRef    = useRef<HTMLDivElement>(null)  // snap alignment guides
   const lockIconsRef    = useRef<HTMLDivElement>(null)   // world-space lock icons
+  const copyBtnRef      = useRef<HTMLDivElement>(null)   // per-image "copiar imagem" buttons
+  const videoBadgeRef   = useRef<HTMLDivElement>(null)   // badge de vídeo (expande as cenas no canvas)
+  const [copiedImageId, setCopiedImageId] = useState<string | null>(null)  // feedback do botão copiar
 
   const flashSave = useCallback(() => {
     setSaveStatus('saving')
     clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => setSaveStatus('saved'), 600)
     setTimeout(() => setSaveStatus('idle'), 3000)
+  }, [])
+
+  // Copia a imagem para o clipboard do SO (colar em outros apps). Mostra ✓ por 1,5s.
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const handleCopyImage = useCallback((nodeId: string) => {
+    const node = nodesRef.current.get(nodeId)
+    if (!node?.data.imagePath) return
+    const flashCopied = () => {
+      setCopiedImageId(nodeId)
+      clearTimeout(copiedTimerRef.current)
+      copiedTimerRef.current = setTimeout(() => setCopiedImageId(null), 1500)
+    }
+
+    const fl = node.cfL ?? 0, fr = node.cfR ?? 0, ft = node.cfT ?? 0, fb = node.cfB ?? 0
+    const cropped = fl > 0.0005 || fr > 0.0005 || ft > 0.0005 || fb > 0.0005
+    if (!cropped) {
+      window.api.copyImageToClipboard(node.data.imagePath).catch(console.error)
+      flashCopied()
+      return
+    }
+
+    // Recortada: gera um PNG só da região visível (no original, em resolução cheia) e copia.
+    const imagePath = node.data.imagePath
+    const img = new Image()
+    img.onload = () => {
+      const W = img.naturalWidth, H = img.naturalHeight
+      const sx = Math.round(fl * W), sy = Math.round(ft * H)
+      const sw = Math.max(1, Math.round((1 - fl - fr) * W)), sh = Math.max(1, Math.round((1 - ft - fb) * H))
+      const canvas = document.createElement('canvas')
+      canvas.width = sw; canvas.height = sh
+      const ctx = canvas.getContext('2d')
+      if (!ctx) { window.api.copyImageToClipboard(imagePath).catch(console.error); flashCopied(); return }
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
+      canvas.toBlob(async (blob) => {
+        if (!blob) { window.api.copyImageToClipboard(imagePath).catch(console.error); return }
+        const buf = new Uint8Array(await blob.arrayBuffer())
+        window.api.copyImageDataToClipboard(buf).catch(console.error)
+      }, 'image/png')
+      flashCopied()
+    }
+    img.onerror = () => { window.api.copyImageToClipboard(imagePath).catch(console.error); flashCopied() }
+    img.src = `file://${imagePath}`
   }, [])
 
   // ─ undo/redo history ──────────────────────────────────────────────────────
@@ -712,10 +905,16 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   const worldRef      = useRef<Container | null>(null)
   const nodesRef      = useRef(new Map<string, PixiNode>())
   const linkedRef     = useRef(new Map<string, string>())
+  // Grafo de adjacência do storyboard de animação. Cada card do prompt liga as DUAS imagens
+  // vizinhas que ele descreve; imagens compartilhadas encadeiam vários pares (A–card–B–card–C…).
+  // Arrastar qualquer nó move o componente conectado inteiro; NÃO deleta em cascata.
+  // Apagar um card corta só aquele elo (imagens sem mais elos voltam a ser independentes).
+  const animLinkRef   = useRef(new Map<string, Set<string>>())
   const processingRef = useRef(new Set<string>())
 
   // Multi-select state — refs for perf-critical paths, useState for React re-renders
   const selIdsRef    = useRef(new Set<string>())     // all selected node IDs
+  const selAnimRef   = useRef(new Set<string>())     // nós com animação de seleção em andamento
   const primaryIdRef = useRef<string | null>(null)   // last-clicked, for tags panel
 
   type IxState =
@@ -725,6 +924,9 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     | { kind: 'drag';    mx0: number; my0: number; starts: Map<string, { x: number; y: number }>; hasMoved: boolean }
     | { kind: 'resize';  id: string; corner: 'se'|'sw'|'ne'|'nw'
         mx0: number; my0: number; w0: number; h0: number; x0: number; y0: number }
+    | { kind: 'crop';    id: string; edge: 'l'|'r'|'t'|'b'
+        mx0: number; my0: number; fullW: number; fullH: number
+        fl0: number; fr0: number; ft0: number; fb0: number; x0: number; y0: number }
   const ixRef      = useRef<IxState>({ kind: 'idle' })
   const marqueeRef = useRef<HTMLDivElement>(null)   // rubber-band selection box DOM element
 
@@ -742,6 +944,18 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   const snapEnabledRef = useRef(true)   // ref for use inside pointer event closures
   const [saveStatus, setSaveStatus]           = useState<'idle'|'saving'|'saved'>('idle')
   const [analysisProgress, setAnalysisProgress] = useState<{ done: number; total: number } | null>(null)
+  const [analyzeEstSec, setAnalyzeEstSec] = useState<number | null>(null) // estimativa por imagem (s)
+  const [analyzeElapsed, setAnalyzeElapsed] = useState(0)                  // segundos desde o início do lote
+  const analyzeStartRef = useRef(0)
+  // Cronômetro do lote de análise → contagem regressiva ao vivo do tempo restante.
+  const analyzing = analysisProgress !== null
+  useEffect(() => {
+    if (!analyzing) { analyzeStartRef.current = 0; setAnalyzeElapsed(0); return }
+    analyzeStartRef.current = Date.now()
+    setAnalyzeElapsed(0)
+    const iv = setInterval(() => setAnalyzeElapsed(Math.round((Date.now() - analyzeStartRef.current) / 1000)), 500)
+    return () => clearInterval(iv)
+  }, [analyzing])
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const analysisTotalRef = useRef(0)
   const analysisDoneRef  = useRef(0)
@@ -759,6 +973,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   const metaNodes         = useCanvasStore(useShallow(s => s.nodes.filter(n => n.type === 'metadataNode')))
   const promptHasContent  = usePromptStore(s => s.promptTags.length > 0)
   const groupNodes      = useCanvasStore(useShallow(s => s.nodes.filter(n => n.type === 'groupNode')))
+  // Ids dos nós que representam vídeos (têm cenas agrupadas) → dirige o badge de vídeo.
+  const videoNodeIds    = useCanvasStore(useShallow(s => s.nodes.filter(n => n.type === 'imageNode' && !!n.data.videoScenes?.length).map(n => n.id)))
   const isEmpty         = useCanvasStore(s => s.nodes.filter(n => n.type === 'imageNode').length === 0)
   const isEmptyRef      = useRef(isEmpty)
   useEffect(() => { isEmptyRef.current = isEmpty }, [isEmpty])
@@ -836,6 +1052,10 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
   const setNodeSelected = (node: PixiNode, sel: boolean) => {
     node.selected = sel
+    // Inicializa o progresso na primeira vez e registra o nó pro ticker animar
+    // o fade-in/out do halo (o glow "surge" suave em vez de aparecer seco).
+    if (node.selAnim === undefined) node.selAnim = sel ? 0 : 1
+    selAnimRef.current.add(node.id)
     redrawBg(node, worldRef.current?.scale.x ?? 1)
   }
 
@@ -924,6 +1144,30 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     state.bg = bg
     world.addChild(container)
 
+    // Cenas de vídeo persistidas → marca o nó como vídeo (mostra o badge).
+    window.api.getSetting('video_' + id).then(raw => {
+      if (!raw) return
+      try {
+        const parsed = JSON.parse(raw)
+        const scenes: string[] = Array.isArray(parsed) ? parsed : parsed.scenes
+        const vName: string | undefined = Array.isArray(parsed) ? undefined : parsed.name
+        if (Array.isArray(scenes) && scenes.length) {
+          state.data = { ...state.data, videoScenes: scenes, videoName: vName }
+          updateNodeData(id, { videoScenes: scenes, videoName: vName })
+        }
+      } catch { /* json inválido — ignora */ }
+    }).catch(() => {})
+
+    // Crop persistido (frações). Aplica assim que estiver disponível E o sprite existir.
+    window.api.getSetting('crop_' + id).then(raw => {
+      if (!raw) return
+      try {
+        const c = JSON.parse(raw)
+        state.cfL = c.l || 0; state.cfR = c.r || 0; state.cfT = c.t || 0; state.cfB = c.b || 0
+        if (state.sprite) applyCrop(state, worldRef.current?.scale.x ?? 1)
+      } catch { /* json inválido — ignora */ }
+    }).catch(() => {})
+
     // Load via HTMLImageElement + Canvas 2D (file:// works; PixiJS mask API is unreliable in v8)
     // Lazy: check if node is in (or near) the viewport before starting load
     const isInViewport = () => {
@@ -961,7 +1205,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           state.bg?.clear()
           state.bg?.roundRect(0, 0, width, imgH, NODE_R).fill({ color: 0x000000, alpha: 0 })
           state.sprite = spr
-          redrawBg(state, worldRef.current?.scale.x ?? 1)
+          if (state.cfL || state.cfR || state.cfT || state.cfB) applyCrop(state, worldRef.current?.scale.x ?? 1)
+          else redrawBg(state, worldRef.current?.scale.x ?? 1)
         } catch { /* fall through to full load */ }
         return
       }
@@ -998,8 +1243,9 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           }
           container.addChild(sprite)
           container.removeChild(bg); container.addChild(bg)
-          redrawBg(state, worldRef.current?.scale.x ?? 1)
           state.sprite = sprite
+          if (state.cfL || state.cfR || state.cfT || state.cfB) applyCrop(state, worldRef.current?.scale.x ?? 1)
+          else redrawBg(state, worldRef.current?.scale.x ?? 1)
         } catch (e) { console.warn('[PixiCanvas] sprite create failed:', e) }
       }
       img.onerror = () => console.warn('[PixiCanvas] image load failed:', srcPath)
@@ -1046,6 +1292,9 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           }
         }
       }
+      // A lógica de SFW acima mexe no sprite.mask; se a imagem está recortada,
+      // reaplica o crop para não "descropar" ao reanalisar/atualizar tags.
+      if (node.cfL || node.cfR || node.cfT || node.cfB) applyCrop(node, worldRef.current?.scale.x ?? 1)
     }
     updateNodeData(id, data)
   }, [updateNodeData])
@@ -1062,6 +1311,44 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
   // ─ processImage ───────────────────────────────────────────────────────────
 
+  // Se o nó está recortado, gera um PNG só da região visível (num temp) para a IA
+  // analisar apenas o trecho recortado. Senão, devolve o próprio basePath.
+  const analyzePathForNode = useCallback(async (nodeId: string, basePath: string): Promise<string> => {
+    const node = nodesRef.current.get(nodeId)
+    if (!node) return basePath
+    const fl = node.cfL ?? 0, fr = node.cfR ?? 0, ft = node.cfT ?? 0, fb = node.cfB ?? 0
+    if (!(fl > 0.0005 || fr > 0.0005 || ft > 0.0005 || fb > 0.0005)) return basePath
+    return await new Promise<string>((resolve) => {
+      const img = new Image()
+      img.onload = () => {
+        const W = img.naturalWidth, H = img.naturalHeight
+        const sx = Math.round(fl * W), sy = Math.round(ft * H)
+        const sw = Math.max(1, Math.round((1 - fl - fr) * W)), sh = Math.max(1, Math.round((1 - ft - fb) * H))
+        const canvas = document.createElement('canvas')
+        canvas.width = sw; canvas.height = sh
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return resolve(basePath)
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
+        canvas.toBlob(async (blob) => {
+          if (!blob) return resolve(basePath)
+          try { resolve((await window.api.writeTempImage(new Uint8Array(await blob.arrayBuffer()))) || basePath) }
+          catch { resolve(basePath) }
+        }, 'image/png')
+      }
+      img.onerror = () => resolve(basePath)
+      img.src = `file://${basePath}`
+    })
+  }, [])
+
+  // Analisa cronometrando a chamada da IA (alimenta a estimativa de tempo).
+  const timedAnalyze = useCallback(async (path: string, lang: 'en' | 'pt', force?: boolean) => {
+    getEstimateSeconds('analyze').then(setAnalyzeEstSec).catch(() => {})
+    const t0 = Date.now()
+    const r = await window.api.analyzeWithAI(path, lang, force)
+    recordDuration('analyze', Date.now() - t0)
+    return r
+  }, [])
+
   const processImage = useCallback(async (imagePath: string, nodeId: string) => {
     analysisTotalRef.current++
     setAnalysisProgress({ done: analysisDoneRef.current, total: analysisTotalRef.current })
@@ -1075,8 +1362,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         try {
           // Use thumbnail for AI analysis when available (avoids sending large originals)
           const node = nodesRef.current.get(nodeId)
-          const pathForAI = node?.data.thumbnailPath || imagePath
-          const aiResult = await window.api.analyzeWithAI(pathForAI, useCanvasStore.getState().appLang)
+          const pathForAI = await analyzePathForNode(nodeId, node?.data.thumbnailPath || imagePath)
+          const aiResult = await timedAnalyze(pathForAI, useCanvasStore.getState().appLang)
           description = typeof aiResult === 'string' ? aiResult : ''
           source = 'ai'
         } catch {
@@ -1112,7 +1399,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             await window.api.updateNodeThumbnail(nodeId, pathForAI)
           } catch { pathForAI = imagePath }
         }
-        const aiResult = await window.api.analyzeWithAI(pathForAI, useCanvasStore.getState().appLang)
+        const aiResult = await timedAnalyze(await analyzePathForNode(nodeId, pathForAI), useCanvasStore.getState().appLang)
         if (typeof aiResult === 'string' && aiResult) {
           description = aiResult
           source = 'ai'
@@ -1176,7 +1463,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         } catch { pathForAI = imagePath }
       }
       const appLang = useCanvasStore.getState().appLang
-      const aiResult = await window.api.analyzeWithAI(pathForAI, appLang, true) // force = ignora cache
+      const aiResult = await timedAnalyze(await analyzePathForNode(nodeId, pathForAI), appLang, true) // force = ignora cache
       const aiTags = parseDescriptionToTags(typeof aiResult === 'string' ? aiResult : '', 'ai')
       if (aiTags.length === 0) { updatePixiNodeData(nodeId, { isPending: false, isError: true }); return }
       // Mantém as tags NÃO-IA (metadado) e troca as antigas de IA pelas novas.
@@ -1204,21 +1491,23 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
   // ─ addNodes ───────────────────────────────────────────────────────────────
 
-  const addNodes = useCallback(async (filePaths: string[], screenPos?: { x: number; y: number }) => {
-    if (filePaths.length === 0) return
+  const addNodes = useCallback(async (filePaths: string[], screenPos?: { x: number; y: number }, worldStart?: { x: number; y: number }): Promise<string[]> => {
+    if (filePaths.length === 0) return []
     const cx = screenPos?.x ?? (containerRef.current?.clientWidth  ?? window.innerWidth)  / 2
     const cy = screenPos?.y ?? (containerRef.current?.clientHeight ?? window.innerHeight) / 2
-    const { x: startWx, y: startWy } = screenToWorld(cx, cy)
+    const { x: startWx, y: startWy } = worldStart ?? screenToWorld(cx, cy)
 
     const sizes = await Promise.all(filePaths.map(getImageNaturalSize))
 
     const GAP  = 24
     const cols = Math.ceil(Math.sqrt(filePaths.length))
     let colIdx = 0, curX = startWx, curY = startWy, rowMaxH = 0
+    const createdIds: string[] = []
 
     filePaths.forEach((imagePath, i) => {
       const { w, h } = sizes[i]
-      const displayWidth  = Math.round(Math.min(Math.max(TARGET_H * w / h, MIN_W), MAX_W))
+      // 15% maior que o tamanho padrão de importação (fator aplicado após o clamp).
+      const displayWidth  = Math.round(Math.min(Math.max(TARGET_H * w / h, MIN_W), MAX_W) * 1.15)
       const displayHeight = Math.round(displayWidth * h / w)
 
       // Single image → drop at cursor; multiple → auto grid
@@ -1227,6 +1516,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         : { x: curX, y: curY }
 
       const nodeId = addImageNode(imagePath, pos, canvasId, displayWidth)
+      createdIds.push(nodeId)
       const newData = useCanvasStore.getState().nodes.find(n => n.id === nodeId)?.data
       if (!newData) return
       addPixiNode(nodeId, 'imageNode', pos.x, pos.y, displayWidth, newData)
@@ -1253,7 +1543,35 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         }
       }
     })
+    return createdIds
   }, [canvasId, addImageNode, addPixiNode, processImage])
+
+  // Cria UM nó que representa o vídeo: a 1ª cena é a capa; todas as cenas ficam
+  // agrupadas em data.videoScenes (persistidas). O badge de vídeo abre o visualizador.
+  const addVideoNode = useCallback(async (scenes: string[], name: string, screenPos?: { x: number; y: number }) => {
+    if (scenes.length === 0) return
+    const cover = scenes[0]
+    const cx = screenPos?.x ?? (containerRef.current?.clientWidth  ?? window.innerWidth)  / 2
+    const cy = screenPos?.y ?? (containerRef.current?.clientHeight ?? window.innerHeight) / 2
+    const { x, y } = screenToWorld(cx, cy)
+    const { w, h } = await getImageNaturalSize(cover)
+    const displayWidth = Math.round(Math.min(Math.max(TARGET_H * w / h, MIN_W), MAX_W) * 1.15)
+
+    const nodeId = addImageNode(cover, { x, y }, canvasId, displayWidth)
+    updateNodeData(nodeId, { videoScenes: scenes, videoName: name }) // marca como vídeo (dirige o badge)
+    const newData = useCanvasStore.getState().nodes.find(n => n.id === nodeId)?.data
+    if (newData) addPixiNode(nodeId, 'imageNode', x, y, displayWidth, newData)
+    if (!processingRef.current.has(nodeId)) {
+      processingRef.current.add(nodeId)
+      enqueueAI(() => processImage(cover, nodeId).finally(() => processingRef.current.delete(nodeId)))
+    }
+    window.api.createNode({ id: nodeId, canvasId, imagePath: cover, x, y, width: displayWidth, height: 200, source: 'none' }).catch(console.error)
+    window.api.setSetting('video_' + nodeId, JSON.stringify({ name, scenes })).catch(() => {}) // persiste nome + cenas
+    window.api.createThumbnail(cover).then(thumbPath => {
+      updateNodeData(nodeId, { thumbnailPath: thumbPath })
+      window.api.updateNodeThumbnail(nodeId, thumbPath).catch(console.error)
+    }).catch(console.error)
+  }, [canvasId, addImageNode, addPixiNode, processImage, updateNodeData, enqueueAI])
 
   // ─ animated zoom ──────────────────────────────────────────────────────────
 
@@ -1369,6 +1687,32 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
   // ─ delete ─────────────────────────────────────────────────────────────────
 
+  // ── Helpers do grafo de storyboard (animLinkRef) ──────────────────────────
+  const animLinkNodes = useCallback((a: string, b: string) => {
+    if (!animLinkRef.current.has(a)) animLinkRef.current.set(a, new Set())
+    if (!animLinkRef.current.has(b)) animLinkRef.current.set(b, new Set())
+    animLinkRef.current.get(a)!.add(b)
+    animLinkRef.current.get(b)!.add(a)
+  }, [])
+  const animUnlinkNode = useCallback((id: string) => {
+    const nb = animLinkRef.current.get(id)
+    if (nb) for (const n of nb) animLinkRef.current.get(n)?.delete(id)
+    animLinkRef.current.delete(id)
+  }, [])
+  // Componente conectado (BFS) a partir de um nó — inclui o próprio nó.
+  const animComponentOf = useCallback((startId: string): Set<string> => {
+    const seen = new Set<string>()
+    const stack = [startId]
+    while (stack.length) {
+      const cur = stack.pop()!
+      if (seen.has(cur)) continue
+      seen.add(cur)
+      const nb = animLinkRef.current.get(cur)
+      if (nb) for (const n of nb) if (!seen.has(n)) stack.push(n)
+    }
+    return seen
+  }, [])
+
   const deleteSelected = useCallback(() => {
     const toDelete = new Set<string>()
     for (const id of selIdsRef.current) {
@@ -1376,6 +1720,9 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       const linked = linkedRef.current.get(id)
       if (linked) { toDelete.add(linked); linkedRef.current.delete(linked) }
       linkedRef.current.delete(id)
+      // Storyboard: apagar um nó remove só os elos dele (o card apagado corta o elo entre
+      // suas duas imagens). Imagens sem mais elos voltam a trabalhar de forma independente.
+      animUnlinkNode(id)
     }
 
     // Snapshot for undo — store node data + positions
@@ -1411,49 +1758,60 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             linkedRef.current.set(node.id, pixiNode.data.linkedImageNodeId)
             linkedRef.current.set(pixiNode.data.linkedImageNodeId, node.id)
           }
+          // Restaura o elo do storyboard se o nó desfeito for um card (_frameA/_frameB).
+          const cp = node.data.comfyParams as { _frameA?: string; _frameB?: string } | undefined
+          if (cp?._frameA && cp?._frameB) {
+            animLinkNodes(node.id, cp._frameA)
+            animLinkNodes(node.id, cp._frameB)
+          }
         })
       },
       redo: () => {
         snapshot.forEach(({ id }) => {
+          animUnlinkNode(id)
           removePixiNode(id); removeNode(id)
           window.api.deleteNode(id).catch(console.error)
         })
       },
     })
-  }, [removePixiNode, removeNode, addPixiNode, pushHistory])
+  }, [removePixiNode, removeNode, addPixiNode, pushHistory, animUnlinkNode, animLinkNodes])
 
   // ─ resize node ────────────────────────────────────────────────────────────
 
+  // newWidth = largura VISÍVEL desejada. Se houver crop, o sprite CHEIO é maior;
+  // re-renderizamos o sprite cheio e reaplicamos o crop (mantém qualidade + recorte).
   const resizeNode = useCallback((id: string, newWidth: number) => {
     const state = nodesRef.current.get(id)
     if (!state || !state.imgEl || !state.container || !state.bg) return
     const img = state.imgEl
-    const newH = Math.round(newWidth * img.naturalHeight / img.naturalWidth)
-    state.width = newWidth; state.height = newH
+    const fl = state.cfL ?? 0, fr = state.cfR ?? 0
+    const cropped = !!(fl || fr || state.cfT || state.cfB)
+    const fullW = newWidth / Math.max(0.05, 1 - fl - fr)
+    const fullH = Math.round(fullW * img.naturalHeight / img.naturalWidth)
 
-    // Redraw sprite at new size
+    // Redraw sprite at full size
     if (state.sprite) { state.container.removeChild(state.sprite); state.sprite.destroy() }
     const dpr = Math.min(window.devicePixelRatio || 1, 3)
     const off = document.createElement('canvas')
-    off.width = Math.round(newWidth * dpr); off.height = Math.round(newH * dpr)
+    off.width = Math.round(fullW * dpr); off.height = Math.round(fullH * dpr)
     const ctx = off.getContext('2d')
     if (ctx) {
       ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high'
       ctx.scale(dpr, dpr); ctx.beginPath()
-      ctx.roundRect(0, 0, newWidth, newH, NODE_R); ctx.clip()
-      ctx.drawImage(img, 0, 0, newWidth, newH)
+      ctx.roundRect(0, 0, fullW, fullH, NODE_R); ctx.clip()
+      ctx.drawImage(img, 0, 0, fullW, fullH)
     }
     const src  = new ImageSource({ resource: off, resolution: dpr })
     const tex  = new Texture({ source: src })
     const spr  = new Sprite(tex)
-    spr.width  = newWidth; spr.height = newH
+    spr.width  = fullW; spr.height = fullH
     if (useCanvasStore.getState().sfwMode && (state.data.isPending || isNsfwNode(state))) {
       if (state.blurMask) {
         state.blurMask.clear()
-        state.blurMask.roundRect(0, 0, newWidth, newH, 10).fill(0xffffff)
+        state.blurMask.roundRect(0, 0, fullW, fullH, 10).fill(0xffffff)
       } else {
         const mask = new Graphics()
-        mask.roundRect(0, 0, newWidth, newH, 10).fill(0xffffff)
+        mask.roundRect(0, 0, fullW, fullH, 10).fill(0xffffff)
         state.container.addChild(mask)
         state.blurMask = mask
       }
@@ -1464,7 +1822,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     state.container.removeChild(state.bg); state.container.addChild(state.bg)
     state.sprite = spr
 
-    redrawBg(state, worldRef.current?.scale.x ?? 1)
+    if (cropped) applyCrop(state, worldRef.current?.scale.x ?? 1)
+    else { state.width = fullW; state.height = fullH; redrawBg(state, worldRef.current?.scale.x ?? 1) }
   }, [])
 
   // ─ group color & label ────────────────────────────────────────────────────
@@ -1508,6 +1867,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       )
       const n = nodesRef.current.get(groupId)
       if (n) n.data = { ...n.data, label: lbl }
+      window.api.updateGroupLabel(groupId, lbl).catch(console.error)
     }
     applyLabel(trimmed)
     pushHistory({ undo: () => applyLabel(prevLabel), redo: () => applyLabel(trimmed) })
@@ -1610,7 +1970,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
   // ─ add to group ───────────────────────────────────────────────────────────
 
-  const addToGroup = useCallback(async () => {
+  const addToGroup = useCallback(async (label?: string): Promise<string | null> => {
     let selectedIds = [...selIdsRef.current]
     let selectedNodes = selectedIds
       .map(id => nodesRef.current.get(id))
@@ -1621,7 +1981,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       selectedNodes = [...nodesRef.current.values()].filter(n => n.type === 'imageNode')
       selectedIds   = selectedNodes.map(n => n.id)
     }
-    if (selectedNodes.length < 2) return
+    if (selectedNodes.length < 2) return null
 
     const PAD = 40
     const minX = Math.min(...selectedNodes.map(n => n.x)) - PAD
@@ -1633,6 +1993,9 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
     // Add to store (provides data for the label overlay)
     useCanvasStore.getState().addGroupNode(groupId, { x: minX, y: minY }, { width: groupW, height: groupH }, canvasId)
+    if (label) {
+      useCanvasStore.getState().setNodes(useCanvasStore.getState().nodes.map(n => n.id === groupId ? { ...n, data: { ...n.data, label } } : n))
+    }
 
     // Create PixiJS visual at z=0 (behind everything)
     const groupData = useCanvasStore.getState().nodes.find(n => n.id === groupId)?.data
@@ -1640,9 +2003,10 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
     // Persist to DB (createGroupNode already calls updateParent for children)
     await window.api.createGroupNode(
-      { id: groupId, canvasId, x: minX, y: minY, width: groupW, height: groupH },
+      { id: groupId, canvasId, x: minX, y: minY, width: groupW, height: groupH, label },
       selectedIds
     )
+    return groupId
   }, [canvasId, addPixiNode])
 
   // ─ load canvas nodes ──────────────────────────────────────────────────────
@@ -1651,7 +2015,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     for (const node of nodesRef.current.values()) {
       if (node.container) { worldRef.current?.removeChild(node.container); node.container.destroy({ children: true }) }
     }
-    nodesRef.current.clear(); linkedRef.current.clear(); selIdsRef.current.clear()
+    nodesRef.current.clear(); linkedRef.current.clear(); animLinkRef.current.clear(); selIdsRef.current.clear(); selAnimRef.current.clear()
     primaryIdRef.current = null; setPrimaryId(null); setSelCount(0)
 
     const storeNodes = useCanvasStore.getState().nodes
@@ -1663,13 +2027,19 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         linkedRef.current.set(n.id, n.data.linkedImageNodeId)
         linkedRef.current.set(n.data.linkedImageNodeId, n.id)
       }
+      // Reconstrói o grafo do storyboard a partir de cada card do prompt (_frameA/_frameB).
+      const cp = n.data.comfyParams as { _frameA?: string; _frameB?: string } | undefined
+      if (cp?._frameA && cp?._frameB) {
+        animLinkNodes(n.id, cp._frameA)
+        animLinkNodes(n.id, cp._frameB)
+      }
       // Trigger AI analysis for nodes that need it (startup retry)
       if (n.type === 'imageNode' && n.data.isPending && !processingRef.current.has(n.id)) {
         processingRef.current.add(n.id)
         enqueueAI(() => processImage(n.data.imagePath, n.id).finally(() => processingRef.current.delete(n.id)))
       }
     })
-  }, [addPixiNode, enqueueAI, processImage])
+  }, [addPixiNode, enqueueAI, processImage, animLinkNodes])
 
   // Retry analysis on demand (placed after processImage + enqueueAI are initialized)
   useEffect(() => {
@@ -1699,7 +2069,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     console.log('[PixiCanvas] init', { cw, ch })
 
     const app = new Application()
-    app.init({ canvas: el, width: cw, height: ch, backgroundAlpha: 0, antialias: false })
+    app.init({ canvas: el, width: cw, height: ch, backgroundAlpha: 0, antialias: true })
       .then(() => {
         if (cancelled) { app.destroy(); return }
         console.log('[PixiCanvas] ready')
@@ -1735,6 +2105,24 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         app.ticker.add(() => {
           const wc = worldRef.current; if (!wc) return
           const wx = wc.x, wy = wc.y, ws = wc.scale.x
+
+          // Anima o halo de seleção (fade-in/out suave, ease exponencial).
+          if (selAnimRef.current.size) {
+            for (const id of [...selAnimRef.current]) {
+              const n = nodesRef.current.get(id)
+              if (!n) { selAnimRef.current.delete(id); continue }
+              const target = n.selected ? 1 : 0
+              const cur = n.selAnim ?? target
+              const next = cur + (target - cur) * 0.25
+              if (Math.abs(target - next) < 0.01) {
+                n.selAnim = target
+                selAnimRef.current.delete(id)
+              } else {
+                n.selAnim = next
+              }
+              redrawBg(n, ws)
+            }
+          }
 
           // Dot pattern: scale tile with zoom AND shift with world position.
           // This makes dots appear truly fixed in canvas space (like PureRef/ReactFlow).
@@ -1927,6 +2315,46 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             })
           }
 
+          // Badge de vídeo — canto superior esquerdo dos nós que representam vídeos.
+          const vbDiv = videoBadgeRef.current
+          if (vbDiv) {
+            const badges = vbDiv.querySelectorAll('[data-video-id]') as NodeListOf<HTMLElement>
+            badges.forEach(el2 => {
+              const id = el2.getAttribute('data-video-id')!
+              const n = nodesRef.current.get(id)
+              if (!n || !n.loaded) { el2.style.display = 'none'; return }
+              el2.style.display = ''
+              el2.style.left = `${wx + n.x * ws + 6}px`
+              el2.style.top  = `${wy + n.y * ws + 6}px`
+            })
+          }
+
+          // Copy-image button — screen-space, hugs the top-right corner of the
+          // selected image with a FIXED pixel margin (independe do zoom).
+          const cpDiv = copyBtnRef.current
+          if (cpDiv) {
+            const btns = cpDiv.querySelectorAll('[data-copy-id]') as NodeListOf<HTMLElement>
+            btns.forEach(el2 => {
+              const id = el2.getAttribute('data-copy-id')!
+              const n = nodesRef.current.get(id)
+              if (!n || !n.loaded) { el2.style.display = 'none'; return }
+              el2.style.display = ''
+              // Tamanho da imagem na tela → limita o botão a no máx. ~45% do menor
+              // lado, com teto no tamanho normal (24px). Assim, em imagens pequenas
+              // (zoom out) o botão encolhe junto e nunca fica maior que a imagem.
+              const imgScreenMin = Math.min(n.width, n.height) * ws
+              const scale = Math.min(0.9, (imgScreenMin * 0.45) / 24)
+              // Ancora no canto superior direito e escala a partir dele.
+              el2.style.transformOrigin = 'top right'
+              el2.style.transform = `scale(${scale})`
+              // Recuo do canto acompanha o raio arredondado + margem proporcional ao botão.
+              const inset = NODE_R * ws * 0.3 + 6 * scale
+              const shift = n.locked ? 30 * scale : 0
+              el2.style.left = `${wx + (n.x + n.width) * ws - 24 - inset - shift}px`
+              el2.style.top  = `${wy + n.y * ws + inset}px`
+            })
+          }
+
           // Group labels — screen-space, follow group + immune to zoom scale
           const glDiv = groupLabelsRef.current
           if (glDiv) {
@@ -2061,6 +2489,28 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       return null
     }
 
+    // Crop: retorna a borda (l/r/t/b) de uma imagem selecionada sob o ponteiro,
+    // excluindo os cantos (que são resize). Usado com Ctrl para recortar.
+    const getCropEdge = (sx: number, sy: number): { node: PixiNode; edge: 'l'|'r'|'t'|'b' } | null => {
+      const { x: wx, y: wy } = screenToWorld(sx, sy)
+      const ws = getWorld().scale.x
+      const T = 12 / ws  // espessura da zona de captura da borda
+      const C = 20 / ws  // exclusão dos cantos
+      for (const id of selIdsRef.current) {
+        const n = nodesRef.current.get(id)
+        if (!n || n.type !== 'imageNode' || !n.loaded || n.locked) continue
+        if (wx < n.x - T || wx > n.x + n.width + T || wy < n.y - T || wy > n.y + n.height + T) continue
+        const nearL = Math.abs(wx - n.x) < T, nearR = Math.abs(wx - (n.x + n.width)) < T
+        const nearT = Math.abs(wy - n.y) < T, nearB = Math.abs(wy - (n.y + n.height)) < T
+        if ((nearL || nearR) && (nearT || nearB)) continue // canto → resize
+        if (nearL && wy > n.y + C && wy < n.y + n.height - C) return { node: n, edge: 'l' }
+        if (nearR && wy > n.y + C && wy < n.y + n.height - C) return { node: n, edge: 'r' }
+        if (nearT && wx > n.x + C && wx < n.x + n.width - C) return { node: n, edge: 't' }
+        if (nearB && wx > n.x + C && wx < n.x + n.width - C) return { node: n, edge: 'b' }
+      }
+      return null
+    }
+
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0 && e.button !== 1) return
       if (isEmptyRef.current) return  // canvas vazio — navegação bloqueada
@@ -2072,8 +2522,22 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       // Middle mouse button always pans — never moves a node
       if (e.button === 1) {
         ixRef.current = { kind: 'pan', mx0: e.clientX, my0: e.clientY, wx0: w.x, wy0: w.y, hasMoved: false }
+        el.style.cursor = 'grabbing'
         el.setPointerCapture(e.pointerId)
         return
+      }
+
+      // Ctrl + arrastar uma borda (não-canto) → CROP (recortar a imagem)
+      if (e.ctrlKey || e.metaKey) {
+        const ce = getCropEdge(sx, sy)
+        if (ce && ce.node.sprite) {
+          const n = ce.node, spr = n.sprite!
+          ixRef.current = { kind: 'crop', id: n.id, edge: ce.edge,
+            mx0: e.clientX, my0: e.clientY, fullW: spr.width, fullH: spr.height,
+            fl0: n.cfL ?? 0, fr0: n.cfR ?? 0, ft0: n.cfT ?? 0, fb0: n.cfB ?? 0, x0: n.x, y0: n.y }
+          el.setPointerCapture(e.pointerId)
+          return
+        }
       }
 
       // Check resize corner (only for unlocked selected nodes)
@@ -2108,6 +2572,14 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             const ln = nodesRef.current.get(linkedId)
             if (ln) starts.set(linkedId, { x: ln.x, y: ln.y })
           }
+          // Storyboard de animação: arrastar qualquer imagem/card move o encadeamento inteiro.
+          if (animLinkRef.current.has(id)) {
+            for (const mid of animComponentOf(id)) {
+              if (mid === id) continue
+              const mn = nodesRef.current.get(mid)
+              if (mn && !mn.locked && !starts.has(mid)) starts.set(mid, { x: mn.x, y: mn.y })
+            }
+          }
           // If dragging a group, bring along all images whose center is inside it
           if (n?.type === 'groupNode') {
             for (const [, img] of nodesRef.current) {
@@ -2126,6 +2598,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           }
         }
         ixRef.current = { kind: 'drag', mx0: e.clientX, my0: e.clientY, starts, hasMoved: false }
+        el.style.cursor = 'grabbing'
       } else if (e.ctrlKey || e.metaKey) {
         // Ctrl + drag on empty space → rubber-band / marquee selection
         const cRect = containerRef.current!.getBoundingClientRect()
@@ -2134,6 +2607,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       } else {
         // Don't clear selection yet — only clear if this ends up being a plain click (no drag)
         ixRef.current = { kind: 'pan', mx0: e.clientX, my0: e.clientY, wx0: w.x, wy0: w.y, hasMoved: false }
+        el.style.cursor = 'grabbing'
       }
       el.setPointerCapture(e.pointerId)
     }
@@ -2144,9 +2618,15 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       const ix = ixRef.current
 
       if (ix.kind === 'idle') {
-        // Update resize cursor when hovering near corners of selected nodes
         const rect2 = el.getBoundingClientRect()
-        const hit2 = getResizeCorner(e.clientX - rect2.left, e.clientY - rect2.top)
+        const msx = e.clientX - rect2.left, msy = e.clientY - rect2.top
+        // Ctrl sobre uma borda → cursor de crop (setas de recorte)
+        if (e.ctrlKey || e.metaKey) {
+          const ce = getCropEdge(msx, msy)
+          if (ce) { el.style.cursor = (ce.edge === 'l' || ce.edge === 'r') ? 'ew-resize' : 'ns-resize'; return }
+        }
+        // Update resize cursor when hovering near corners of selected nodes
+        const hit2 = getResizeCorner(msx, msy)
         el.style.cursor = hit2 ? RESIZE_CURSORS[hit2.corner] : ''
         return
       }
@@ -2155,6 +2635,40 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         const dx = e.clientX - ix.mx0, dy = e.clientY - ix.my0
         if (Math.abs(dx) > 2 || Math.abs(dy) > 2) ix.hasMoved = true
         const w = getWorld(); w.x = ix.wx0 + dx; w.y = ix.wy0 + dy
+        return
+      }
+
+      if (ix.kind === 'crop') {
+        const ws = getWorld().scale.x
+        const dx = (e.clientX - ix.mx0) / ws, dy = (e.clientY - ix.my0) / ws
+        const n = nodesRef.current.get(ix.id)
+        if (!n || !n.sprite) return
+        const MINV = 40 // área visível mínima (world px)
+        const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v))
+        let fl = ix.fl0, fr = ix.fr0, ft = ix.ft0, fb = ix.fb0, nx = ix.x0, ny = ix.y0
+        if (ix.edge === 'r') {
+          fr = clamp(ix.fr0 * ix.fullW - dx, 0, ix.fullW * (1 - ix.fl0) - MINV) / ix.fullW
+        } else if (ix.edge === 'l') {
+          const lpx = clamp(ix.fl0 * ix.fullW + dx, 0, ix.fullW * (1 - ix.fr0) - MINV)
+          fl = lpx / ix.fullW; nx = ix.x0 + (lpx - ix.fl0 * ix.fullW)
+        } else if (ix.edge === 'b') {
+          fb = clamp(ix.fb0 * ix.fullH - dy, 0, ix.fullH * (1 - ix.ft0) - MINV) / ix.fullH
+        } else { // 't'
+          const tpx = clamp(ix.ft0 * ix.fullH + dy, 0, ix.fullH * (1 - ix.fb0) - MINV)
+          ft = tpx / ix.fullH; ny = ix.y0 + (tpx - ix.ft0 * ix.fullH)
+        }
+        n.cfL = fl; n.cfR = fr; n.cfT = ft; n.cfB = fb; n.x = nx; n.y = ny
+        if (n.container) { n.container.x = nx; n.container.y = ny }
+        applyCrop(n, ws)
+        const metaId = linkedRef.current.get(ix.id)
+        if (metaId) {
+          const metaNode = nodesRef.current.get(metaId)
+          if (metaNode) {
+            metaNode.y = n.y + n.height + 14
+            const metaEl = metaOverRef.current?.querySelector(`[data-meta-id="${metaId}"]`) as HTMLElement | null
+            if (metaEl) metaEl.style.top = `${metaNode.y}px`
+          }
+        }
         return
       }
 
@@ -2227,17 +2741,21 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             }
           }
 
-          const newH = Math.round(newW * aspect)
-          node.sprite.width = newW; node.sprite.height = newH
-          node.width = newW; node.height = newH
-          if (node.bg) redrawBg(node, ws)
+          // newW é a largura VISÍVEL alvo. Se houver crop, o sprite cheio é maior:
+          // fullW = visível / (1 - cropL - cropR). applyCrop deriva a área visível.
+          const fl = node.cfL ?? 0, fr = node.cfR ?? 0
+          const fullW = newW / Math.max(0.05, 1 - fl - fr)
+          node.sprite.width = fullW
+          node.sprite.height = Math.round(fullW * aspect)
+          if (fl || fr || node.cfT || node.cfB) applyCrop(node, ws)
+          else { node.width = newW; node.height = node.sprite.height; if (node.bg) redrawBg(node, ws) }
 
           // Keep linked metadata node below the image in real-time
           const metaId = linkedRef.current.get(ix.id)
           if (metaId) {
             const metaNode = nodesRef.current.get(metaId)
             if (metaNode) {
-              const newMetaY = node.y + newH + 14
+              const newMetaY = node.y + node.height + 14
               metaNode.y = newMetaY
               const metaEl = metaOverRef.current?.querySelector(`[data-meta-id="${metaId}"]`) as HTMLElement | null
               if (metaEl) metaEl.style.top = `${newMetaY}px`
@@ -2356,6 +2874,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
     const onUp = (e: PointerEvent) => {
       const ix = ixRef.current; ixRef.current = { kind: 'idle' }
+      el.style.cursor = ''  // volta ao cursor normal ao soltar (mãozinha só durante o arraste)
 
       if (ix.kind === 'pan' && !ix.hasMoved) {
         // Plain click on empty space (no drag) → deselect
@@ -2363,16 +2882,38 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         return
       }
 
+      if (ix.kind === 'crop') {
+        const node = nodesRef.current.get(ix.id)
+        if (node) {
+          // Persiste as frações de crop (settings) e a nova posição (crop da esquerda/topo move o nó).
+          window.api.setSetting('crop_' + ix.id, JSON.stringify({ l: node.cfL ?? 0, r: node.cfR ?? 0, t: node.cfT ?? 0, b: node.cfB ?? 0 })).catch(() => {})
+          window.api.updateNodePosition(ix.id, node.x, node.y).catch(() => {})
+          useCanvasStore.getState().setNodes(
+            useCanvasStore.getState().nodes.map(n => n.id === ix.id ? { ...n, position: { x: node.x, y: node.y } } : n)
+          )
+          const metaId = linkedRef.current.get(ix.id)
+          if (metaId) {
+            const metaNode = nodesRef.current.get(metaId)
+            if (metaNode) { const y = node.y + node.height + 14; metaNode.y = y; window.api.updateNodePosition(metaId, metaNode.x, y).catch(() => {}) }
+          }
+          flashSave()
+        }
+        return
+      }
+
       if (ix.kind === 'resize') {
         const node = nodesRef.current.get(ix.id)
         if (node) {
-          const w0 = ix.w0, x0 = ix.x0, finalW = node.width, finalX = node.x
-          resizeNode(ix.id, finalW)  // redraw at full quality
-          window.api.updateNodeSize(ix.id, finalW, node.height).catch(console.error)
+          const w0 = ix.w0, x0 = ix.x0, finalX = node.x
+          const finalVisibleW = node.width           // visível — usado pelo resizeNode/undo/redo
+          resizeNode(ix.id, finalVisibleW)           // redraw at full quality (crop-aware)
+          const fullW = node.sprite?.width ?? node.width   // cheia — persistida no banco
+          const fullH = node.sprite?.height ?? node.height
+          window.api.updateNodeSize(ix.id, fullW, fullH).catch(console.error)
           window.api.updateNodePosition(ix.id, finalX, node.y).catch(console.error)
           useCanvasStore.getState().setNodes(
             useCanvasStore.getState().nodes.map(n => n.id === ix.id
-              ? { ...n, style: { ...n.style, width: finalW }, position: { x: finalX, y: n.position.y } }
+              ? { ...n, style: { ...n.style, width: fullW }, position: { x: finalX, y: n.position.y } }
               : n)
           )
 
@@ -2396,7 +2937,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
           pushHistory({
             undo: () => { resizeNode(ix.id, w0); const n = nodesRef.current.get(ix.id); if (n?.container) { n.container.x = x0; n.x = x0 } },
-            redo: () => { resizeNode(ix.id, finalW); const n = nodesRef.current.get(ix.id); if (n?.container) { n.container.x = finalX; n.x = finalX } },
+            redo: () => { resizeNode(ix.id, finalVisibleW); const n = nodesRef.current.get(ix.id); if (n?.container) { n.container.x = finalX; n.x = finalX } },
           })
         }
         if (snapGuideRef.current) snapGuideRef.current.innerHTML = ''
@@ -2420,7 +2961,10 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
         let firstId: string | null = null
         for (const [id, node] of nodesRef.current) {
-          if (node.type === 'metadataNode') continue
+          // Pula metadados ligados a imagens; cards de prompt (texto livre) entram na seleção.
+          const isPromptCard = node.type === 'metadataNode' &&
+            !!(node.data.comfyParams as { _promptText?: string } | undefined)?._promptText
+          if (node.type === 'metadataNode' && !isPromptCard) continue
           // Intersect check
           if (node.x < wx1 && node.x + node.width > wx0 && node.y < wy1 && node.y + node.height > wy0) {
             setNodeSelected(node, true)
@@ -2622,8 +3166,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         })
         return
       }
-      // Ctrl+D — duplicate selected nodes
-      if (ctrl && e.key === 'd') {
+      // Ctrl+Shift+D — duplica os nós selecionados (Ctrl+D sem shift = ditar por voz).
+      if (ctrl && e.shiftKey && (e.key === 'd' || e.key === 'D')) {
         e.preventDefault()
         const OFFSET = 24
         const nodes = [...selIdsRef.current]
@@ -2692,6 +3236,9 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       const rect = el.getBoundingClientRect()
       const hit = getNodeAt(e.clientX - rect.left, e.clientY - rect.top)
       if (!hit) return
+      // Nó de vídeo → expande nas cenas agrupadas no canvas (em vez de dar zoom).
+      const sNode = useCanvasStore.getState().nodes.find(n => n.id === hit.id)
+      if (sNode?.data.videoScenes?.length) { expandVideoRef.current?.(hit.id); return }
       const ct = containerRef.current!
       const cx = hit.x + hit.width  / 2
       const cy = hit.y + hit.height / 2
@@ -2728,6 +3275,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       e.preventDefault()
       const w = getWorld()
       ixRef.current = { kind: 'pan', mx0: e.clientX, my0: e.clientY, wx0: w.x, wy0: w.y, hasMoved: false }
+      ct.style.cursor = 'grabbing'
     }
     // Window-level move/up so pan works even when pointer is over overlays
     const onWindowMove = (e: PointerEvent) => {
@@ -2741,6 +3289,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       const ix = ixRef.current
       if (ix.kind !== 'pan') return
       ixRef.current = { kind: 'idle' }
+      ct.style.cursor = ''; el.style.cursor = ''
       if (!ix.hasMoved) clearAllSelection()
     }
 
@@ -2768,19 +3317,218 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       window.removeEventListener('pointerup', onWindowUp)
       window.removeEventListener('keydown', onKey)
     }
-  }, [pixiReady, selectOne, toggleSelect, clearAllSelection, deleteSelected])
+  }, [pixiReady, selectOne, toggleSelect, clearAllSelection, deleteSelected, animComponentOf])
+
+  // ── Vídeo → cenas ───────────────────────────────────────────────────────
+  const [videoExtracting, setVideoExtracting] = useState<string | null>(null)
+  const [videoError, setVideoError] = useState<string | null>(null)
+  const [videoScenes, setVideoScenes] = useState<{
+    videoPath: string; name: string; screenPos: { x: number; y: number }
+    frames: { index: number; framePath: string; timestamp: number }[]
+    capped: boolean; threshold: number; start: number; end?: number
+  } | null>(null)
+  // Editor de trim: vídeo aguardando o usuário escolher início/fim antes de extrair.
+  const [videoTrim, setVideoTrim] = useState<{ videoPath: string; name: string; screenPos: { x: number; y: number } } | null>(null)
+
+  const runVideoExtract = useCallback(async (videoPath: string, name: string, screenPos: { x: number; y: number }, threshold: number, start: number, end?: number) => {
+    setVideoError(null)
+    setVideoExtracting(name)
+    try {
+      // Cobertura: garante ~1 quadro a cada 10% da duração do trecho, mesmo sem cortes
+      // de câmera (ex.: cena única de carro em movimento). Cortes detectados somam a isso.
+      const maxGap = end != null && end > start ? Math.max(0.5, (end - start) / 10) : undefined
+      const res = await window.api.extractVideoScenes(videoPath, { threshold, maxScenes: 60, start, end, maxGap })
+      if (!res.frames.length) {
+        setVideoScenes(null)
+        setVideoError('Nenhuma cena detectada nesse trecho. Tente "+ mais cenas" ou amplie a seleção.')
+        return
+      }
+      setVideoScenes({ videoPath, name, screenPos, frames: res.frames, capped: res.capped, threshold, start, end })
+    } catch (err) {
+      console.error('[video] extração falhou:', err)
+      setVideoScenes(null)
+      setVideoError('Não consegui processar esse vídeo.')
+    } finally {
+      setVideoExtracting(null)
+    }
+  }, [])
+
+  // Vídeo importado → abre o editor de trim antes de extrair as cenas.
+  const handleVideoDrop = useCallback((videoPath: string, screenPos: { x: number; y: number }) => {
+    const name = (videoPath.split(/[\\/]/).pop() ?? 'vídeo').replace(/\.[^.]+$/, '') // sem extensão
+    setVideoTrim({ videoPath, name, screenPos })
+  }, [])
+
+  const handleReextractScenes = useCallback((direction: 'more' | 'fewer') => {
+    if (!videoScenes) return
+    const step = direction === 'more' ? -0.1 : 0.1 // menos threshold = mais cenas
+    const next = Math.min(0.9, Math.max(0.1, Math.round((videoScenes.threshold + step) * 100) / 100))
+    runVideoExtract(videoScenes.videoPath, videoScenes.name, videoScenes.screenPos, next, videoScenes.start, videoScenes.end)
+  }, [videoScenes, runVideoExtract])
+
+  const handleConfirmScenes = useCallback((paths: string[]) => {
+    const pos = videoScenes?.screenPos
+    setVideoScenes(null)
+    if (paths.length > 0) addVideoNode(paths, videoScenes?.name ?? 'vídeo', pos) // agrupa as cenas num nó de vídeo
+  }, [videoScenes, addVideoNode])
+
+  // Expande o nó de vídeo: remove o nó e joga TODAS as cenas no canvas, já agrupadas
+  // (grupo rotulado com o nome do vídeo, pra deixar claro que são daquele vídeo).
+  const expandVideoToGroup = useCallback(async (nodeId: string) => {
+    const node = useCanvasStore.getState().nodes.find(n => n.id === nodeId)
+    const scenes = node?.data.videoScenes
+    if (!node || !scenes?.length) return
+    const worldStart = { x: node.position.x, y: node.position.y }
+    const name = node.data.videoName ?? 'Vídeo'
+    removePixiNode(nodeId)
+    removeNode(nodeId)
+    window.api.deleteNode(nodeId).catch(() => {})
+    window.api.setSetting('video_' + nodeId, '').catch(() => {})
+    const ids = await addNodes(scenes, undefined, worldStart)
+    if (ids.length >= 2) {
+      selIdsRef.current = new Set(ids)
+      await addToGroup(name)
+      clearAllSelection()
+    }
+  }, [addNodes, addToGroup, removePixiNode, removeNode, clearAllSelection])
+  const expandVideoRef = useRef<((id: string) => void) | null>(null)
+  expandVideoRef.current = expandVideoToGroup
+
+  // Prompt de animação: 2 OU MAIS imagens selecionadas → cadeia first/last frame.
+  // Vira um storyboard [img0]—[card 0→1]—[img1]—[card 1→2]—[img2]… com um prompt
+  // de movimento por par consecutivo. Todos ligados: arrastar um move a cadeia toda.
+  const [animatePrompting, setAnimatePrompting] = useState(false)
+  const handleAnimatePrompt = useCallback(async () => {
+    // Ordena as imagens selecionadas da esquerda pra direita (ordem de leitura do storyboard).
+    const imgs = [...selIdsRef.current]
+      .map(id => nodesRef.current.get(id))
+      .filter((n): n is PixiNode => !!n && n.type === 'imageNode' && !!n.data.imagePath)
+      .sort((p, q) => (p.x - q.x) || (p.y - q.y))
+    if (imgs.length < 2) return
+    setAnimatePrompting(true)
+    try {
+      // Um prompt de movimento por par consecutivo (sequencial — a IA local só roda um por vez).
+      const prompts: string[] = []
+      for (let i = 0; i < imgs.length - 1; i++) {
+        const p = await window.api.animatePrompt(imgs[i].data.imagePath, imgs[i + 1].data.imagePath)
+        prompts.push(p || '')
+      }
+      if (prompts.every(p => !p)) return
+
+      const GAP = 40, PW = 260, CARD_H = 220
+      const cardIds = prompts.map(() => uuid())
+
+      // Layout da cadeia ancorado em (ox, oy): imagens e cards intercalados, tops alinhados.
+      type Rect = { x: number; y: number; w: number; h: number }
+      const layoutAt = (ox: number, oy: number) => {
+        const imgRects: Rect[] = [], cardRects: Rect[] = []
+        let cx = ox
+        for (let i = 0; i < imgs.length; i++) {
+          imgRects.push({ x: cx, y: oy, w: imgs[i].width, h: imgs[i].height })
+          cx += imgs[i].width + GAP
+          if (i < imgs.length - 1) { cardRects.push({ x: cx, y: oy, w: PW, h: CARD_H }); cx += PW + GAP }
+        }
+        return { imgRects, cardRects }
+      }
+      const overlaps = (r1: Rect, r2: Rect) =>
+        r1.x < r2.x + r2.w && r1.x + r1.w > r2.x && r1.y < r2.y + r2.h && r1.y + r1.h > r2.y
+
+      // Evita sobreposição com todo nó "com corpo" que não faça parte da própria cadeia.
+      // Ignora também os cards de metadados ligados às imagens da cadeia (eles se movem junto).
+      const imgIds = new Set(imgs.map(n => n.id))
+      const linkedMetaIds = new Set(imgs.map(n => linkedRef.current.get(n.id)).filter(Boolean) as string[])
+      const others = [...nodesRef.current.values()].filter(n =>
+        !imgIds.has(n.id) && !linkedMetaIds.has(n.id) && n.type !== 'groupNode')
+      const clashAt = (ox: number, oy: number) => {
+        const { imgRects, cardRects } = layoutAt(ox, oy)
+        const all = [...imgRects, ...cardRects]
+        return others.some(o => { const orc = { x: o.x, y: o.y, w: o.width, h: o.height }; return all.some(r => overlaps(r, orc)) })
+      }
+
+      // Procura espaço livre: mantém a âncora e desce/sobe a cadeia; se nada livre, joga abaixo de tudo.
+      const MARGIN = 30
+      const stepY = Math.max(CARD_H, ...imgs.map(n => n.height)) + MARGIN
+      const ax = imgs[0].x, ay = imgs[0].y
+      let ox = ax, oy = ay
+      if (clashAt(ox, oy)) {
+        let placed = false
+        for (let k = 1; k <= 80; k++) {
+          if (!clashAt(ax, ay + k * stepY)) { oy = ay + k * stepY; placed = true; break }
+          if (!clashAt(ax, ay - k * stepY)) { oy = ay - k * stepY; placed = true; break }
+        }
+        if (!placed) oy = others.reduce((m, o) => Math.max(m, o.y + o.height), ay) + MARGIN
+      }
+
+      const { imgRects, cardRects } = layoutAt(ox, oy)
+
+      // Reposiciona todas as imagens da cadeia — e o card de metadados (ComfyUI) ligado a
+      // cada imagem vai junto, sempre logo ABAIXO da imagem a que se refere.
+      const metaMoves = new Map<string, { x: number; y: number }>()
+      imgs.forEach((n, i) => {
+        const r = imgRects[i]
+        n.x = r.x; n.y = r.y
+        if (n.container) { n.container.x = r.x; n.container.y = r.y }
+        window.api.updateNodePosition(n.id, r.x, r.y).catch(() => {})
+        const metaId = linkedRef.current.get(n.id)
+        if (metaId) {
+          const metaNode = nodesRef.current.get(metaId)
+          if (metaNode) {
+            const mx = r.x, my = r.y + n.height + 14
+            metaNode.x = mx; metaNode.y = my
+            const metaEl = metaOverRef.current?.querySelector(`[data-meta-id="${metaId}"]`) as HTMLElement | null
+            if (metaEl) { metaEl.style.left = `${mx}px`; metaEl.style.top = `${my}px` }
+            metaMoves.set(metaId, { x: mx, y: my })
+            window.api.updateNodePosition(metaId, mx, my).catch(() => {})
+          }
+        }
+      })
+      useCanvasStore.getState().setNodes(useCanvasStore.getState().nodes.map(n => {
+        const i = imgs.findIndex(m => m.id === n.id)
+        if (i >= 0) return { ...n, position: { x: imgRects[i].x, y: imgRects[i].y } }
+        const mv = metaMoves.get(n.id)
+        return mv ? { ...n, position: { x: mv.x, y: mv.y } } : n
+      }))
+
+      // Cria um card por par consecutivo e liga-o às suas duas imagens vizinhas.
+      cardRects.forEach((r, i) => {
+        const id = cardIds[i]
+        const cp = { _promptText: prompts[i], _frameA: imgs[i].id, _frameB: imgs[i + 1].id } as unknown as ComfyParams
+        addMetadataNode(id, { x: r.x, y: r.y }, canvasId, cp, '')
+        const pData = useCanvasStore.getState().nodes.find(n => n.id === id)?.data
+        if (pData) addPixiNode(id, 'metadataNode', r.x, r.y, PW, pData)
+        window.api.createNode({ id, canvasId, imagePath: '', x: r.x, y: r.y, width: PW, height: 200, source: 'comfyui', nodeType: 'metadata', comfyParams: JSON.stringify(cp) }).catch(() => {})
+        animLinkNodes(id, imgs[i].id)
+        animLinkNodes(id, imgs[i + 1].id)
+      })
+
+      // Manda pro Prompt Builder (numera as transições quando há mais de uma).
+      const combined = prompts.length > 1
+        ? prompts.map((p, i) => `# Transição ${i + 1} → ${i + 2}\n${p}`).join('\n\n')
+        : prompts[0]
+      window.dispatchEvent(new CustomEvent('set-prompt-text', { detail: { text: combined } }))
+      flashSave()
+    } catch (err) {
+      console.error('[animate] falhou:', err)
+    } finally {
+      setAnimatePrompting(false)
+    }
+  }, [canvasId, addMetadataNode, addPixiNode, flashSave, animLinkNodes])
 
   const onDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }, [])
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     const paths: string[] = []
+    let videoPath = ''
     for (const file of Array.from(e.dataTransfer.files)) {
       let p: string
       try { p = window.api.getPathForFile(file) } catch { p = (file as File & { path?: string }).path ?? '' }
-      if (p && /\.(png|jpe?g|webp)$/i.test(p)) paths.push(p)
+      if (!p) continue
+      if (/\.(png|jpe?g|webp)$/i.test(p)) paths.push(p)
+      else if (/\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(p) && !videoPath) videoPath = p
     }
     if (paths.length > 0) addNodes(paths, { x: e.clientX, y: e.clientY })
-  }, [addNodes])
+    if (videoPath) handleVideoDrop(videoPath, { x: e.clientX, y: e.clientY })
+  }, [addNodes, handleVideoDrop])
 
   // ─ render ─────────────────────────────────────────────────────────────────
 
@@ -2797,6 +3545,9 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
   const primaryType = primaryId ? nodesRef.current.get(primaryId)?.type : null
   const showTags = primaryId && selectedNodeData && primaryType === 'imageNode' && selCount === 1
+  // 2+ imagens selecionadas → habilita o "Prompt de animação" (cadeia first/last frame).
+  const selectedImageCount = [...selIdsRef.current].map(id => nodesRef.current.get(id)).filter(n => n?.type === 'imageNode').length
+  const animImagesSelected = selectedImageCount >= 2 && selectedImageCount === selCount
 
   return (
     <div
@@ -2816,6 +3567,33 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           backgroundPosition: '0px 0px',                    // overwritten by ticker
         }}
       />
+
+      {/* Prompt de animação — aparece quando 2+ imagens estão selecionadas (cadeia first/last frame) */}
+      {animImagesSelected && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30">
+          <button
+            onClick={handleAnimatePrompt}
+            disabled={animatePrompting}
+            title="Gera prompts de movimento entre as imagens em sequência (workflow first/last frame)"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-full text-[12px] font-medium text-white transition-all hover:brightness-110 disabled:opacity-70 cursor-pointer"
+            style={{ background: 'linear-gradient(135deg, #8f0e2e, #F97316)', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}
+          >
+            {animatePrompting ? (
+              <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="9" stroke="rgba(255,255,255,0.3)" strokeWidth="3" />
+                <path d="M12 3a9 9 0 019 9" stroke="#fff" strokeWidth="3" strokeLinecap="round" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>
+              </svg>
+            )}
+            {animatePrompting
+              ? 'Gerando prompt de animação…'
+              : `Prompt entre imagens${selectedImageCount > 2 ? ` · ${selectedImageCount - 1} transições` : ''}`}
+          </button>
+        </div>
+      )}
 
       {/* Snap alignment guides — filled by drag onMove via innerHTML */}
       <div ref={snapGuideRef} className="absolute inset-0 pointer-events-none z-10" />
@@ -2839,8 +3617,10 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       <div ref={metaOverRef} className="absolute top-0 left-0 pointer-events-none" style={{ transformOrigin: '0 0', transition: 'opacity 700ms ease-out' }}>
         {metaNodes.map(n => {
           const linkedImageId = linkedRef.current.get(n.id)
-          // Visible only when linked image (or the meta node itself) is selected
-          const isVisible = linkedImageId ? primaryId === linkedImageId : primaryId === n.id
+          // Card de prompt de animação → sempre visível; metadados ComfyUI só ao selecionar.
+          const isPrompt = !!(n.data.comfyParams as { _promptText?: string } | undefined)?._promptText
+          const isVisible = isPrompt ? true : (linkedImageId ? primaryId === linkedImageId : primaryId === n.id)
+          const isSelected = selIdsRef.current.has(n.id)
           return (
             <div
               key={n.id}
@@ -2853,8 +3633,16 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
                 pointerEvents: isVisible ? 'auto' : 'none',
                 transition: 'opacity 180ms ease',
               }}
+              // Card de prompt é selecionável por clique (pra poder apagar com Delete).
+              // Ctrl/⌘ + clique alterna na multisseleção. Não seleciona ao clicar em botões.
+              onPointerDown={isPrompt ? (e => {
+                if ((e.target as HTMLElement).closest('button')) return
+                e.stopPropagation()
+                if (e.ctrlKey || e.metaKey) toggleSelect(n.id)
+                else selectOne(n.id)
+              }) : undefined}
             >
-              <MetadataNodeView data={n.data} selected={isVisible} />
+              <MetadataNodeView data={n.data} selected={isPrompt ? isSelected : isVisible} />
             </div>
           )
         })}
@@ -2978,6 +3766,48 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         ))}
       </div>
 
+      {/* Badge de vídeo — canto superior esquerdo dos nós de vídeo; abre o visualizador de cenas */}
+      <div ref={videoBadgeRef} className="absolute inset-0 pointer-events-none overflow-hidden">
+        {videoNodeIds.map(id => (
+          <div key={id} data-video-id={id} className="absolute pointer-events-auto" style={{ left: 0, top: 0, display: 'none' }}
+            title="Ver cenas do vídeo"
+            onPointerDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); expandVideoToGroup(id) }}>
+            <div className="flex items-center justify-center rounded-md cursor-pointer transition-transform hover:scale-110" style={{ width: 24, height: 24, background: 'linear-gradient(135deg, #8f0e2e, #F97316)', boxShadow: '0 2px 10px rgba(0,0,0,0.5)' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/>
+              </svg>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Copy-image button — só na imagem selecionada, canto superior direito, posicionado pelo ticker */}
+      <div ref={copyBtnRef} className="absolute inset-0 pointer-events-none overflow-hidden">
+        {primaryId && primaryType === 'imageNode' && (
+          <div data-copy-id={primaryId} className="absolute pointer-events-auto" style={{ left: 0, top: 0, display: 'none' }}
+            title="Copiar imagem"
+            onPointerDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); handleCopyImage(primaryId) }}>
+            <div
+              className="w-6 h-6 flex items-center justify-center rounded-md cursor-pointer transition-transform hover:scale-110"
+              style={{ background: 'linear-gradient(135deg, #8f0e2e, #F97316)', boxShadow: '0 4px 14px rgba(0,0,0,0.45)' }}
+            >
+              {copiedImageId === primaryId ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                  <path d="M20 6L9 17L4 12" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              ) : (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="8" y="8" width="14" height="14" rx="2" />
+                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                </svg>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Progress bar — visible during AI analysis */}
       {analysisProgress && (
         <div className="absolute top-0 left-0 right-0 z-30 pointer-events-none">
@@ -2989,6 +3819,11 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           </div>
           <div className="absolute top-1 left-1/2 -translate-x-1/2 text-[10px] text-orange-400/70">
             Analisando {analysisProgress.done}/{analysisProgress.total}
+            {analyzeEstSec
+              ? (analyzeEstSec * analysisProgress.total - analyzeElapsed > 0
+                  ? ` · restam ~${analyzeEstSec * analysisProgress.total - analyzeElapsed}s`
+                  : ' · finalizando…')
+              : ''}
           </div>
         </div>
       )}
@@ -3297,6 +4132,55 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             ))}
           </div>
         </div>
+      )}
+
+      {/* ── Vídeo → cenas: progresso, erro e modal de confirmação ── */}
+      {videoExtracting && !videoScenes && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-auto" style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)' }}>
+          <div className="flex flex-col items-center gap-3 px-6 py-5 rounded-2xl" style={{ background: '#111111', border: '1px solid rgba(255,255,255,0.08)' }}>
+            <svg className="animate-spin" width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="9" stroke="rgba(255,255,255,0.15)" strokeWidth="3" />
+              <path d="M12 3a9 9 0 0 1 9 9" stroke="#F97316" strokeWidth="3" strokeLinecap="round" />
+            </svg>
+            <div className="text-[12px] text-white/70">Detectando cenas…</div>
+            <div className="text-[11px] text-white/35 max-w-[240px] truncate">{videoExtracting}</div>
+          </div>
+        </div>
+      )}
+
+      {videoError && !videoExtracting && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 pointer-events-auto">
+          <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-[12px] text-red-300/90" style={{ background: 'rgba(40,10,12,0.95)', border: '1px solid rgba(248,113,113,0.25)' }}>
+            <span>{videoError}</span>
+            <button onClick={() => setVideoError(null)} className="text-red-300/50 hover:text-red-300">✕</button>
+          </div>
+        </div>
+      )}
+
+      {videoTrim && (
+        <VideoTrimModal
+          videoPath={videoTrim.videoPath}
+          videoName={videoTrim.name}
+          onCancel={() => setVideoTrim(null)}
+          onConfirm={(start, end) => {
+            const t = videoTrim
+            setVideoTrim(null)
+            runVideoExtract(t.videoPath, t.name, t.screenPos, 0.5, start, end)
+          }}
+        />
+      )}
+
+      {videoScenes && (
+        <VideoSceneImport
+          videoName={videoScenes.name}
+          videoPath={videoScenes.videoPath}
+          frames={videoScenes.frames}
+          capped={videoScenes.capped}
+          busy={!!videoExtracting}
+          onConfirm={handleConfirmScenes}
+          onCancel={() => setVideoScenes(null)}
+          onReextract={handleReextractScenes}
+        />
       )}
 
     </div>

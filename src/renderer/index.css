@@ -124,16 +124,6 @@
     cursor: grabbing;
   }
 
-  /* Variante negativa — tom avermelhado para diferenciar da zona positiva */
-  .rm-builder-chip.is-negative {
-    background: rgba(239, 68, 68, 0.14);
-    color: rgba(254, 202, 202, 0.95);
-  }
-  .rm-builder-chip.is-negative:hover {
-    background: rgba(239, 68, 68, 0.22);
-    color: #fff;
-  }
-
   /* Badge de peso dentro do chip */
   .rm-weight-badge {
     font-size: 9px;
@@ -238,4 +228,9 @@ input, textarea, [contenteditable] {
   border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+
+/* Painel de tags: todos os botões (cores, traduzir, +todas, copiar…) mostram o cursor de clique */
+.rm-tagspanel button:not(:disabled),
+.rm-tagspanel [role="button"] { cursor: pointer; }
+.rm-tagspanel button:disabled { cursor: default; }
 

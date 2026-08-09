@@ -4,16 +4,18 @@ import { useCanvasStore, usePromptStore, type ImageNodeData, type ComfyParams } 
 import logoUrl from '../../assets/logo.png'
 
 interface TopBarProps {
-  onOpenSettings: () => void
+  onOpenSettings: (view?: 'choose' | 'api' | 'local') => void
   onOpenAbout: () => void
   onOpenTutorial: () => void
   hasApiKey: boolean
   apiProviderName?: string
+  localActive?: boolean   // sem chave, mas IA local (Ollama) rodando
+  localModel?: string
   onRemoveApiKey: () => void
   onSignOut: () => void
 }
 
-export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, hasApiKey, apiProviderName, onRemoveApiKey, onSignOut }: TopBarProps) {
+export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, hasApiKey, apiProviderName, localActive, localModel, onRemoveApiKey, onSignOut }: TopBarProps) {
   const [alwaysOnTop, setAlwaysOnTop] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -47,9 +49,13 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
   }
 
   const handleConnectionClick = () => {
-    if (!hasApiKey) { onOpenSettings(); return }
-    const confirmed = window.confirm('Remover sua API Key? O app não conseguirá analisar imagens sem ela.')
-    if (confirmed) onRemoveApiKey()
+    if (hasApiKey) {
+      const confirmed = window.confirm('Remover sua API Key? O app não conseguirá analisar imagens sem ela.')
+      if (confirmed) onRemoveApiKey()
+      return
+    }
+    // Sem chave: modo Local → abre a aba Local; senão a tela de escolha.
+    onOpenSettings(localActive ? 'local' : 'choose')
   }
 
 
@@ -599,9 +605,21 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
           onClick={handleConnectionClick}
           className="no-drag-region flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/[0.04] border border-white/[0.06] hover:bg-white/[0.09] hover:border-white/[0.1] transition-all"
         >
-          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${hasApiKey ? 'bg-green-400' : 'bg-orange-400'}`} />
+          {hasApiKey ? (
+            <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-green-400" />
+          ) : localActive ? (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#34D399" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+              <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+            </svg>
+          ) : (
+            <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-orange-400" />
+          )}
           <span className="text-[11px] text-white/50">
-            {hasApiKey ? (apiProviderName ? `API conectada — ${apiProviderName}` : 'API Conectada') : 'Conecte sua API'}
+            {hasApiKey
+              ? (apiProviderName ? `API conectada — ${apiProviderName}` : 'API Conectada')
+              : localActive
+                ? `IA Local${localModel ? ` · ${localModel}` : ''}`
+                : 'Configure seu Ref Map'}
           </span>
         </button>
 

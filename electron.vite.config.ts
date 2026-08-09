@@ -25,6 +25,9 @@ export default defineConfig({
     resolve: {
       alias: { '@renderer': resolve('src/renderer') }
     },
+    // Transformers.js (Whisper local) traz onnxruntime-web; deixar o Vite pré-empacotar
+    // quebra o carregamento do WASM. Excluímos do optimize e o importamos dinamicamente.
+    optimizeDeps: { exclude: ['@xenova/transformers'] },
     plugins: [react(), tailwindcss()],
     build: {
       rollupOptions: {

@@ -1,11 +1,48 @@
 import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { usePromptStore, useCanvasStore } from '../../store'
 import { useMyPresets } from '../../hooks/useMyPresets'
+
+// Imagens de exemplo das categorias (boneco 3D neutro). O glob resolve cada asset em
+// URL no bundle (arquivo ou data-URI inline, conforme o tamanho); adicionar novas
+// imagens é só soltar o arquivo na pasta certa — sem mexer no código.
+const exampleImages = import.meta.glob('../../assets/examples/**/*.webp', {
+  eager: true, query: '?url', import: 'default',
+}) as Record<string, string>
+const EXAMPLE_BY_SLUG: Record<string, string> = {}
+for (const [p, url] of Object.entries(exampleImages)) {
+  EXAMPLE_BY_SLUG[p.split('/').pop()!.replace(/\.webp$/, '')] = url
+}
+const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+// Retorna a imagem de exemplo de uma tag (chave = nome EM INGLÊS), se existir.
+const tagImage = (item: string): string | undefined => EXAMPLE_BY_SLUG[slugify(item)]
+
+// Categoria Cores: preview é só o swatch da cor (sem imagem). Mapa nome → hex.
+const COLOR_HEX: Record<string, string> = {
+  'Almond Color': '#EFDECD', 'Amber': '#FFBF00', 'Apricot Orange': '#FBCEB1', 'Ash Gray': '#B2BEB5',
+  'Beige': '#F5F5DC', 'Black': '#000000', 'Blue': '#0000FF', 'Brick Red': '#CB4154', 'Bronze': '#CD7F32',
+  'Brown': '#8B4513', 'Caramel Color': '#C68E17', 'Carnation Pink': '#FFA6C9', 'Cerulean': '#007BA7',
+  'Charcoal Grey': '#36454F', 'Coral Orange': '#FF7F50', 'Cream Color': '#FFFDD0', 'Cyan': '#00FFFF',
+  'Denim Blue': '#1560BD', 'Emerald Green': '#50C878', 'Forest Green': '#228B22', 'Fuchsia': '#FF00FF',
+  'Gold': '#FFD700', 'Grass Green': '#4CBB17', 'Green': '#008000', 'Indigo': '#4B0082', 'Ivory Color': '#FFFFF0',
+  'Jade Green': '#00A86B', 'Lavender': '#E6E6FA', 'Lemon Yellow': '#FFF700', 'Lilac Purple': '#C8A2C8',
+  'Lime Green': '#32CD32', 'Magenta': '#FF00FF', 'Mahogany': '#C04000', 'Marigold': '#EAA221', 'Maroon': '#800000',
+  'Mauve': '#E0B0FF', 'Midnight Blue': '#191970', 'Mint Green': '#98FF98', 'Mocha Brown': '#6F4E37',
+  'Navy Blue': '#000080', 'Olive Green': '#808000', 'Orange': '#FFA500', 'Orchid Pink': '#DA70D6',
+  'Peach Color': '#FFE5B4', 'Pearl Color': '#EAE0C8', 'Periwinkle': '#CCCCFF', 'Pink': '#FFC0CB',
+  'Plum Purple': '#8E4585', 'Purple': '#800080', 'Red': '#FF0000', 'Rose': '#FF007F', 'Ruby Red': '#E0115F',
+  'Rust Brown': '#B7410E', 'Salmon Pink': '#FF91A4', 'Sand Color': '#C2B280', 'Sapphire Blue': '#0F52BA',
+  'Seafoam Green': '#93E9BE', 'Sienna': '#A0522D', 'Silver': '#C0C0C0', 'Sky Blue': '#87CEEB',
+  'Slate Gray': '#708090', 'Steel Blue': '#4682B4', 'Tan Brown': '#D2B48C', 'Tangerine Orange': '#F28500',
+  'Teal': '#008080', 'Terracotta Orange': '#E2725B', 'Topaz Yellow': '#FFC87C', 'Turquoise': '#40E0D0',
+  'Vanilla Color': '#F3E5AB', 'Violet': '#7F00FF', 'White': '#FFFFFF', 'Wine Red': '#722F37', 'Yellow': '#FFFF00',
+}
+const tagColor = (item: string): string | undefined => COLOR_HEX[item]
 
 const PRESETS: { group: string; items: string[] }[] = [
   {
     group: 'Angle of View',
-    items: ['Atmospheric Perspective','Blurry Foreground','Close-Up','Cowboy Shot','Cut-In','Dutch Angle','First-Person View','Fisheye','From Above','From Behind','From Below','From Outside','From Side','Hatching (Texture)','Multiple Views','Panorama','Perspective','Pov','Rotated','Sideways','Three Sided View','Upside-Down','Vanishing Point','Wide Shot'],
+    items: ['360 View','Atmospheric Perspective','Bird\'s Eye View','Blurry Foreground','Close-Up','Cowboy Shot','Cut-In','Dutch Angle','Eye-Level Shot','First-Person View','Fisheye','Foreshortening','Frontal','From Above','From Behind','From Below','From Outside','From Side','Hatching (Texture)','High Angle','Low Angle','Multiple Views','Over-The-Shoulder','Panorama','Perspective','Pov','Profile','Rotated','Satellite Image','Sideways','Three Sided View','Three-Quarter View','Ultra-Wide Angle','Upside-Down','Vanishing Point','Wide Shot','Wide-Angle','Worm\'s Eye View'],
   },
   {
     group: 'Artists',
@@ -21,7 +58,7 @@ const PRESETS: { group: string; items: string[] }[] = [
   },
   {
     group: 'Composition',
-    items: ['Beauty Shot','Bird\'s Eye View','Black And White Portrait','Candid Shot','Double Exposure Portrait','Environmental Portrait','Extreme Close-Up','Framed Portrait','Frontal','Full Shot','Group Shot','Headshot','High Angle','High-Key Portrait','Infrared Portrait','Low Angle','Macro','Medium Close-Up','Medium Shot','Micro','Motion Blur Portrait','Narrative Portrait','Outdoor Portrait','Over-The-Shoulder','Profile','Reflection Portrait','Silhouette','Studio Portrait','Surreal Portrait','Three-Quarter View','Two-Shot','Worm\'s Eye View'],
+    items: ['Beauty Shot','Black And White Portrait','Candid Shot','Double Exposure Portrait','Environmental Portrait','Extreme Close-Up','Framed Portrait','Full Shot','Group Shot','Headshot','High-Key Portrait','Infrared Portrait','Macro','Medium Close-Up','Medium Shot','Micro','Motion Blur Portrait','Narrative Portrait','Outdoor Portrait','Reflection Portrait','Silhouette','Studio Portrait','Surreal Portrait','Two-Shot'],
   },
   {
     group: 'Composition Form',
@@ -29,11 +66,7 @@ const PRESETS: { group: string; items: string[] }[] = [
   },
   {
     group: 'Lighting',
-    items: ['Artificial Indoor Lighting','Back Lighting','Bright And Sunny Lighting','Broad Lighting','Butterfly Lighting','Candlelit Scene Lighting','Clamshell Lighting','Cool And Blue Lighting','Dappled Sunlight Through Leaves Lighting','Dim And Cozy Lighting','Dramatic High Contrast Lighting','Dramatic Spotlight Lighting','Ethereal Moonlight Lighting','Firelight Flicker Lighting','Fluorescent Office Lighting','Futuristic Neon Glow Lighting','Glowing Neon Lighting','Golden Hour Lighting','Hard Shadows Lighting','Harsh Overhead Lighting','High Key Lighting','Light Painting Lighting','Loop Lighting','Low Key Lighting','Majestic Lighting','Moody And Mysterious Lighting','Moonlit Forest Lighting','Natural Sunlight Lighting','Neon Glow Lighting','Night Photography Lighting','Product Lighting','Radiant Angelic Lighting','Rembrandt Lighting','Rim Lighting','Romantic Candlelight Lighting','Rustic Campfire Lighting','Rustic Fireplace Lighting','Sci-Fi Futuristic Lighting','Short Lighting','Side Lighting','Silhouette Lighting','Soft And Diffused Lighting','Soft And Warm Lighting','Soft Shadows Lighting','Split Lighting','Starry Night Lighting','Still Life Lighting','Studio Portrait Lighting','Sunrise At The Mountains Lighting','Sunrise Over The Ocean Lighting','Sunset Silhouette Lighting','Twinkling Fairy Lights Lighting','Under The Streetlights Lighting','Underwater Illumination Lighting','Vibrant Stage Lighting','Vintage Film Noir Lighting','Warm Sunset Glow Lighting','Whimsical Fairy Tale Lighting'],
-  },
-  {
-    group: 'Negative',
-    items: ['Blurry, Text, Watermark, Signature, Frame','Disfigure Body, Disfigured Torso, Disfigured Face, Disfigured Eyes, Disfigured Pupils, Disfigured Arms, Disfigured Hands, Disfigured Fingers, Disfigured Legs, Disfigured Toes'],
+    items: ['Artificial Indoor Lighting','Back Lighting','Bright And Sunny Lighting','Broad Lighting','Butterfly Lighting','Candlelit Scene Lighting','Clamshell Lighting','Cool And Blue Lighting','Dappled Sunlight Through Leaves Lighting','Dim And Cozy Lighting','Dramatic High Contrast Lighting','Dramatic Spotlight Lighting','Ethereal Moonlight Lighting','Firelight Flicker Lighting','Fluorescent Office Lighting','Glowing Neon Lighting','Golden Hour Lighting','Hard Shadows Lighting','Harsh Overhead Lighting','High Key Lighting','Light Painting Lighting','Loop Lighting','Low Key Lighting','Majestic Lighting','Moody And Mysterious Lighting','Moonlit Forest Lighting','Natural Sunlight Lighting','Neon Glow Lighting','Night Photography Lighting','Product Lighting','Radiant Angelic Lighting','Rembrandt Lighting','Rim Lighting','Romantic Candlelight Lighting','Rustic Campfire Lighting','Rustic Fireplace Lighting','Sci-Fi Futuristic Lighting','Short Lighting','Side Lighting','Silhouette Lighting','Soft And Diffused Lighting','Soft And Warm Lighting','Soft Shadows Lighting','Split Lighting','Starry Night Lighting','Still Life Lighting','Studio Portrait Lighting','Sunrise At The Mountains Lighting','Sunrise Over The Ocean Lighting','Sunset Silhouette Lighting','Twinkling Fairy Lights Lighting','Under The Streetlights Lighting','Underwater Illumination Lighting','Vibrant Stage Lighting','Vintage Film Noir Lighting','Warm Sunset Glow Lighting','Whimsical Fairy Tale Lighting'],
   },
   {
     group: 'Picture Effect',
@@ -49,7 +82,7 @@ const PRESETS: { group: string; items: string[] }[] = [
   },
   {
     group: 'Shot',
-    items: ['135Mm','35Mm','360 View','85Mm','Bokeh','Canon','Caustics','Diffraction Spikes','Eye-Level Shot','F/1.2','F/1.8','F/16','F/2.8','F/4.0','Foreshortening','Fujifilm','Hasselblad','Lens Flare','Macro Photo','Nikon','Overexposure','Satellite Image','Sony Fe','Sony Fe Gm','Ultra-Wide Angle','Wide-Angle'],
+    items: ['135Mm','35Mm','85Mm','Bokeh','Canon','Caustics','Diffraction Spikes','F/1.2','F/1.8','F/16','F/2.8','F/4.0','Fujifilm','Hasselblad','Lens Flare','Nikon','Overexposure','Sony Fe','Sony Fe Gm'],
   },
   {
     group: 'Style',
@@ -65,7 +98,6 @@ const GROUP_PT: Record<string, string> = {
   'Composition': 'Composição',
   'Composition Form': 'Forma de Composição',
   'Lighting': 'Iluminação',
-  'Negative': 'Negativo',
   'Picture Effect': 'Efeito de Imagem',
   'Picture Quality': 'Qualidade de Imagem',
   'Setting': 'Cenário',
@@ -91,6 +123,24 @@ export default function PromptPresets() {
   const [editValue, setEditValue] = useState('')
   const [savedFeedback, setSavedFeedback] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  // Preview ao passar o mouse numa tag: imagem de exemplo OU swatch de cor.
+  const [hoverImg, setHoverImg] = useState<{ url?: string; color?: string; top: number; left: number } | null>(null)
+  const hoverHideRef = useRef<number | null>(null)
+  const cancelHoverHide = () => { if (hoverHideRef.current) { clearTimeout(hoverHideRef.current); hoverHideRef.current = null } }
+  const scheduleHoverHide = () => { cancelHoverHide(); hoverHideRef.current = window.setTimeout(() => setHoverImg(null), 120) }
+  const PREVIEW_W = 200
+  const showPreview = (item: string, el: HTMLElement) => {
+    const url = tagImage(item)
+    const color = url ? undefined : tagColor(item)
+    if (!url && !color) return
+    cancelHoverHide()
+    const r = el.getBoundingClientRect()
+    // Aparece à direita da linha; se não couber, vai pra esquerda.
+    const right = r.right + 10
+    const left = right + PREVIEW_W > window.innerWidth ? r.left - PREVIEW_W - 10 : right
+    const top = Math.max(8, Math.min(r.top - 8, window.innerHeight - 300))
+    setHoverImg({ url, color, left, top })
+  }
 
   useEffect(() => {
     if (!open) return
@@ -309,13 +359,27 @@ export default function PromptPresets() {
                   />
                 </div>
               ) : (
-                <div key={item} className="group flex items-center gap-1 px-1 rounded-lg hover:bg-white/[0.05] transition-colors">
+                <div
+                  key={item}
+                  className="group flex items-center gap-1 px-1 rounded-lg hover:bg-white/[0.05] transition-colors"
+                  onMouseEnter={e => showPreview(item, e.currentTarget)}
+                  onMouseLeave={scheduleHoverHide}
+                >
                   <button
                     onClick={() => handleAdd(disp(item))}
                     className="flex-1 text-left px-2 py-1.5 text-[11.5px] text-white/50 group-hover:text-white/85 transition-colors"
                   >
                     {disp(item)}
                   </button>
+                  {tagColor(item) ? (
+                    <span className="shrink-0 mr-1.5 w-3 h-3 rounded-full ring-1 ring-white/20" style={{ backgroundColor: tagColor(item) }} title="Cor" />
+                  ) : tagImage(item) ? (
+                    <span className="shrink-0 mr-1 text-white/20 group-hover:text-orange-400/70 transition-colors" title="Passe o mouse para ver um exemplo">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
+                      </svg>
+                    </span>
+                  ) : null}
                   {activeGroup === 'Meus Presets' && (
                     <>
                       <button
@@ -352,6 +416,23 @@ export default function PromptPresets() {
           style={{ color: '#F97316', borderColor: 'rgba(249,115,22,0.2)', background: 'rgba(249,115,22,0.08)' }}>
           ★ Salvo em Meus Presets
         </div>
+      )}
+
+      {/* Preview (imagem de exemplo OU swatch de cor) — portal no body pra não ser cortado */}
+      {hoverImg && createPortal(
+        <div
+          className="fixed z-[60] pointer-events-none rounded-xl overflow-hidden"
+          style={{
+            left: hoverImg.left, top: hoverImg.top, width: PREVIEW_W,
+            background: '#0d0d0f', border: '1px solid rgba(255,255,255,0.12)',
+            boxShadow: '0 16px 44px rgba(0,0,0,0.65)',
+          }}
+        >
+          {hoverImg.color
+            ? <div style={{ width: '100%', height: 120, backgroundColor: hoverImg.color }} />
+            : <img src={hoverImg.url} className="w-full h-auto block" alt="" draggable={false} />}
+        </div>,
+        document.body,
       )}
     </div>
   )

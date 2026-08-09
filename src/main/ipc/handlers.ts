@@ -10,6 +10,9 @@ import { extractMetadata } from '../metadata'
 import { analyzeWithAnthropic } from '../ai/anthropic'
 import { analyzeWithOpenAI } from '../ai/openai'
 import { MODEL_PROMPT_CONFIGS, IMAGE_MODEL_IDS } from '../ai/model-prompts'
+import { getLocalConfig, getLocalTextConfig, localChat, isLocalUnavailable, LOCAL_AI_UNAVAILABLE } from '../ai/local'
+import { installLocalAI, uninstallLocal } from '../ai/localInstall'
+import { extractScenes, extractFrameAt } from '../video/extractScenes'
 
 export function registerHandlers(win: BrowserWindow): void {
   // ── Window controls ────────────────────────────────────────────────────
@@ -35,6 +38,21 @@ export function registerHandlers(win: BrowserWindow): void {
     return result.filePaths
   })
 
+  // ── Video: detecção de cena + extração de keyframes ─────────────────────
+  ipcMain.handle('video:openFilePicker', async (): Promise<string | null> => {
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openFile'],
+      filters: [{ name: 'Vídeos', extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'] }],
+    })
+    return result.filePaths[0] ?? null
+  })
+  ipcMain.handle('video:extractScenes', (_e, videoPath: string, opts?: { threshold?: number; maxScenes?: number }) =>
+    extractScenes(videoPath, opts),
+  )
+  ipcMain.handle('video:extractFrame', (_e, videoPath: string, timestamp: number) =>
+    extractFrameAt(videoPath, timestamp),
+  )
+
   // ── Clipboard image ────────────────────────────────────────────────────
   ipcMain.handle('clipboard:readImage', async (): Promise<string | null> => {
     const { clipboard, nativeImage } = await import('electron')
@@ -46,6 +64,61 @@ export function registerHandlers(win: BrowserWindow): void {
     fs.writeFileSync(tmpPath, img.toPNG())
     return tmpPath
   })
+
+  // Copia a imagem do disco para o clipboard do SO, para colar em outros apps.
+  ipcMain.handle('clipboard:writeImage', async (_e, imagePath: string): Promise<boolean> => {
+    const { clipboard, nativeImage } = await import('electron')
+    const img = nativeImage.createFromPath(imagePath)
+    if (img.isEmpty()) return false
+    clipboard.writeImage(img)
+    return true
+  })
+
+  // Grava bytes de imagem num arquivo temporário e devolve o caminho (usado para
+  // analisar só a região recortada com a IA).
+  ipcMain.handle('image:writeTempImage', async (_e, data: Uint8Array): Promise<string> => {
+    const dir = path.join(app.getPath('temp'), 'refmap-crop')
+    fs.mkdirSync(dir, { recursive: true })
+    const p = path.join(dir, `crop-${crypto.randomBytes(6).toString('hex')}.png`)
+    fs.writeFileSync(p, Buffer.from(data))
+    return p
+  })
+
+  // Copia bytes de imagem (ex.: PNG já recortado) para o clipboard.
+  ipcMain.handle('clipboard:writeImageData', async (_e, data: Uint8Array): Promise<boolean> => {
+    const { clipboard, nativeImage } = await import('electron')
+    const img = nativeImage.createFromBuffer(Buffer.from(data))
+    if (img.isEmpty()) return false
+    clipboard.writeImage(img)
+    return true
+  })
+
+  // ── IA Local (Ollama) ──────────────────────────────────────────────────
+  // Status do endpoint local: usado nas Settings para mostrar se o Ollama está
+  // rodando e listar os modelos instalados.
+  ipcMain.handle('local:status', async (): Promise<{ ok: boolean; models: string[]; model: string }> => {
+    const { baseURL, apiKey, model } = getLocalConfig()          // visão
+    const { model: textModel } = getLocalTextConfig()            // texto (sem censura)
+    try {
+      const client = new OpenAI({ apiKey, baseURL, timeout: 4000, maxRetries: 0 })
+      const list = await client.models.list()
+      const ids = list.data.map(m => m.id)
+      const hasOne = (m: string) => {
+        const base = m.split(':')[0]
+        return ids.some(id => id === m || id === base || id.startsWith(base + ':'))
+      }
+      // "ok" exige o Ollama rodando E OS DOIS modelos do híbrido baixados (visão + texto).
+      // Se faltar qualquer um, o "Baixar" reaparece pra puxar o que falta.
+      return { ok: hasOne(model) && hasOne(textModel), models: ids, model }
+    } catch {
+      return { ok: false, models: [], model }
+    }
+  })
+
+  // Instala/prepara a IA local dentro do app (baixa Ollama + puxa o modelo).
+  // Progresso é enviado via evento 'local:installProgress'.
+  ipcMain.handle('local:install', async () => { await installLocalAI(win); return true })
+  ipcMain.handle('local:uninstall', async () => { await uninstallLocal(win); return true })
 
   // ── Thumbnail generation ───────────────────────────────────────────────
   ipcMain.handle('image:createThumbnail', async (_e, imagePath: string): Promise<string> => {
@@ -100,12 +173,22 @@ export function registerHandlers(win: BrowserWindow): void {
       if (aKey) { apiKey = aKey; effectiveProvider = 'anthropic' }
       else if (oKey) { apiKey = oKey; effectiveProvider = 'openai' }
     }
-    if (!apiKey) throw new Error('API key not configured')
 
     const isTogetherKey = apiKey.startsWith('tgp_')
 
     let tags: string
-    if (isTogetherKey) {
+    if (!apiKey) {
+      // Sem chave de nuvem → IA local (Ollama). Comportamento padrão do app.
+      const local = getLocalConfig()
+      try {
+        tags = await analyzeWithOpenAI(imagePath, local.apiKey, {
+          baseURL: local.baseURL, model: local.model, lang,
+        })
+      } catch (err) {
+        if (isLocalUnavailable(err)) throw new Error(LOCAL_AI_UNAVAILABLE)
+        throw err
+      }
+    } else if (isTogetherKey) {
       // Try Together AI vision models in order until one works. These are the
       // multimodal models that are actually SERVERLESS on Together — verified by
       // sending a real image to /v1/chat/completions. Counterintuitively, the
@@ -195,11 +278,23 @@ export function registerHandlers(win: BrowserWindow): void {
     if (!config) throw new Error(`Unknown model: ${modelId}`)
 
     const provider = settingQueries.get('aiProvider') || 'anthropic'
-    const encryptedKey = settingQueries.get(`apiKey_${provider}`)
-    if (!encryptedKey) throw new Error('API key not configured')
-    const apiKey = safeStorage.decryptString(Buffer.from(encryptedKey, 'hex'))
+    // Resolve a chave: provider ativo, senão qualquer outra chave de nuvem salva.
+    const decryptKey = (enc: unknown): string => {
+      if (!enc || typeof enc !== 'string') return ''
+      try { return safeStorage.decryptString(Buffer.from(enc, 'hex')).trim() } catch { return '' }
+    }
+    let apiKey = decryptKey(settingQueries.get(`apiKey_${provider}`))
+    let effectiveProvider = provider as string
+    if (!apiKey) {
+      const aKey = decryptKey(settingQueries.get('apiKey_anthropic'))
+      const oKey = decryptKey(settingQueries.get('apiKey_openai'))
+      if (aKey) { apiKey = aKey; effectiveProvider = 'anthropic' }
+      else if (oKey) { apiKey = oKey; effectiveProvider = 'openai' }
+    }
+    // Sem nenhuma chave de nuvem → usa IA local (Ollama).
+    const useLocal = !apiKey
     // Together AI keys start with "tgp_" — auto-route regardless of which slot they were saved in
-    const effectiveProvider = apiKey.startsWith('tgp_') ? 'together' : provider
+    if (apiKey.startsWith('tgp_')) effectiveProvider = 'together'
 
     // Remove markdown/special characters from the prompt
     const cleanPrompt = (text: string): string =>
@@ -243,11 +338,24 @@ export function registerHandlers(win: BrowserWindow): void {
 
 VERBATIM TEXT — HIGHEST PRIORITY: If the user gives words that a person/character/subject SPEAKS or SAYS (dialogue, voice-over, narration), or literal TEXT TO BE DISPLAYED in the image/video (speech bubble, sign, caption, title, subtitle, label, on-screen text), reproduce that text EXACTLY word-for-word, wrapped in double quotes, in the SAME language the user wrote it. Never translate it, paraphrase it, summarize it, rephrase it, correct it, shorten it or drop it. Only the surrounding description gets translated to English; the quoted spoken/displayed text must stay intact exactly as written.
 
-IMPORTANT — STAY FAITHFUL TO WHAT THE USER WROTE: Keep ALL of the user's meaningful content — every subject, attribute, action, setting and style cue they wrote must survive in the output. Do not drop, merge away or over-summarize what they gave you. Restructure and clarify THEIR prompt into the format and technical vocabulary the target model expects (per your instructions), and add only the supporting detail their idea needs to render well — camera, lighting, quality and structure cues that are implied by what they described. Do NOT invent new subjects, characters, objects, actions, backstory, settings or narrative that the user did not state or clearly imply; no embellishment for its own sake. When in doubt, preserve the user's own wording instead of rewriting it. The result must read as a faithful, well-structured version of THE USER'S prompt — not a different or more elaborate creative concept.${realismDefault}
+CORE OBJECTIVE — REFORMAT, DO NOT INVENT (as important as the VERBATIM rule above): Your ONLY job is to take the user's prompt and RE-EXPRESS the exact same idea in the structure, order and technical vocabulary that ${config.label} understands best. You are a FORMATTER, not a co-writer. The optimized prompt must describe the SAME scene the user wrote — same subjects, same actions, same setting — nothing added, nothing removed.
+- Keep ALL of the user's content: every subject, attribute, action, setting, style and detail they wrote must survive.
+- Do NOT add any new information the user did not write or unambiguously imply: no new subjects, characters, objects, actions, poses, backstory, locations, time of day, weather, colors, clothing, camera angles, lens, lighting, mood, emotions or artistic style. Do not "enrich", "elevate", dramatize or embellish. Every visual element in your output must trace back to something the user actually wrote. (The ONLY permitted style choice is the DEFAULT STYLE rule below, and only when the user specified no style at all.)
+- You MAY only reorganize, clarify and translate the user's words into the target format, plus the minimal structural/technical phrasing the format itself requires — but that phrasing must NOT introduce new scene content.
+- The prompt guides/examples for this model show you the FORMAT and structure to follow — do NOT copy their invented level of detail onto the user's prompt. Match their shape, not their content.
+- When unsure whether a detail is implied, LEAVE IT OUT and keep the user's own wording.
+The result must be a faithful, well-formatted version of THE USER'S prompt: same scene, better structure — never a richer, more elaborate or different creative concept.${realismDefault}
 
 Return ONLY the prompt, no introduction, no explanation:\n\n${prompt}`
 
-    if (effectiveProvider === 'anthropic') {
+    if (useLocal) {
+      // IA local (Ollama) — erros de conexão viram LOCAL_AI_UNAVAILABLE.
+      const raw = await localChat([
+        { role: 'system', content: config.systemPrompt },
+        { role: 'user', content: userMsg },
+      ])
+      return cleanPrompt(stripIntro(raw.replace(/\\n/g, '\n')))
+    } else if (effectiveProvider === 'anthropic') {
       const client = new Anthropic({ apiKey })
       const message = await client.messages.create({
         model: 'claude-haiku-4-5-20251001',
@@ -274,19 +382,96 @@ Return ONLY the prompt, no introduction, no explanation:\n\n${prompt}`
     }
   })
 
+  // ── Prompt de animação (first/last frame) ─────────────────────────────
+  // Recebe DUAS imagens (primeiro e último quadro) e gera um prompt de MOVIMENTO
+  // descrevendo a transição — para workflows image-to-video de first/last frame.
+  ipcMain.handle('prompt:animate', async (_e, firstPath: string, lastPath: string): Promise<string> => {
+    const provider = settingQueries.get('aiProvider') || 'anthropic'
+    const decryptKey = (enc: unknown): string => {
+      if (!enc || typeof enc !== 'string') return ''
+      try { return safeStorage.decryptString(Buffer.from(enc, 'hex')).trim() } catch { return '' }
+    }
+    let apiKey = decryptKey(settingQueries.get(`apiKey_${provider}`))
+    let effectiveProvider = provider as string
+    if (!apiKey) {
+      const aKey = decryptKey(settingQueries.get('apiKey_anthropic'))
+      const oKey = decryptKey(settingQueries.get('apiKey_openai'))
+      if (aKey) { apiKey = aKey; effectiveProvider = 'anthropic' }
+      else if (oKey) { apiKey = oKey; effectiveProvider = 'openai' }
+    }
+    const useLocal = !apiKey
+    if (apiKey.startsWith('tgp_')) effectiveProvider = 'together'
+
+    const instruction = `You are given the FIRST frame and the LAST frame of a short video clip, in that order. Write ONE detailed MOTION prompt in English describing the animation/transition FROM the first frame TO the last frame: what moves and how, camera movement (pan/zoom/dolly/orbit), changes in pose, expression, lighting and background, and the overall pacing. Focus on the MOVEMENT and the transition between the two frames — do NOT merely describe the static images. Make it a single flowing prompt suitable for a first-last-frame image-to-video model. Return ONLY the prompt, no preamble, no headings.`
+
+    const readB64 = (p: string) => {
+      const buf = fs.readFileSync(p)
+      const ext = path.extname(p).slice(1).toLowerCase()
+      return { b64: buf.toString('base64'), ext: ext === 'jpg' ? 'jpeg' : ext }
+    }
+
+    try {
+      if (effectiveProvider === 'anthropic' && !useLocal) {
+        const client = new Anthropic({ apiKey })
+        const block = (p: string) => {
+          const { b64, ext } = readB64(p)
+          return { type: 'image' as const, source: { type: 'base64' as const, media_type: `image/${ext}` as 'image/jpeg', data: b64 } }
+        }
+        const msg = await client.messages.create({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 1024,
+          messages: [{ role: 'user', content: [block(firstPath), block(lastPath), { type: 'text', text: instruction }] }],
+        })
+        const b = msg.content[0]
+        return b?.type === 'text' ? b.text.trim() : ''
+      }
+
+      // openai / together / local (Ollama) — todos compatíveis com a API da OpenAI
+      const cfg = useLocal ? getLocalConfig() : null
+      const baseURL = useLocal ? cfg!.baseURL : (effectiveProvider === 'together' ? 'https://api.together.xyz/v1' : undefined)
+      const key = useLocal ? cfg!.apiKey : apiKey
+      const model = useLocal ? cfg!.model : (effectiveProvider === 'together' ? 'google/gemma-3n-E4B-it' : 'gpt-4o-mini')
+      const client = new OpenAI({ apiKey: key, ...(baseURL ? { baseURL } : {}), timeout: 120_000, maxRetries: useLocal ? 0 : 1 })
+      const url = (p: string) => { const { b64, ext } = readB64(p); return `data:image/${ext};base64,${b64}` }
+      const completion = await client.chat.completions.create({
+        model, max_tokens: 1024,
+        messages: [{ role: 'user', content: [
+          { type: 'image_url', image_url: { url: url(firstPath) } },
+          { type: 'image_url', image_url: { url: url(lastPath) } },
+          { type: 'text', text: instruction },
+        ] }],
+      })
+      return completion.choices[0]?.message?.content?.trim() ?? ''
+    } catch (err) {
+      if (useLocal && isLocalUnavailable(err)) throw new Error(LOCAL_AI_UNAVAILABLE)
+      throw err
+    }
+  })
+
   // ── Tag translation ───────────────────────────────────────────────────
   ipcMain.handle('tags:translate', async (_e, values: string[], targetLang: 'pt' | 'en') => {
     const provider = settingQueries.get('aiProvider') || 'anthropic'
-    const encryptedKey = settingQueries.get(`apiKey_${provider}`)
-    if (!encryptedKey) throw new Error('API key not configured')
-    const apiKey = safeStorage.decryptString(Buffer.from(encryptedKey, 'hex'))
-    const effectiveProvider = apiKey.startsWith('tgp_') ? 'together' : provider
+    const decryptKey = (enc: unknown): string => {
+      if (!enc || typeof enc !== 'string') return ''
+      try { return safeStorage.decryptString(Buffer.from(enc, 'hex')).trim() } catch { return '' }
+    }
+    let apiKey = decryptKey(settingQueries.get(`apiKey_${provider}`))
+    let effectiveProvider = provider as string
+    if (!apiKey) {
+      const aKey = decryptKey(settingQueries.get('apiKey_anthropic'))
+      const oKey = decryptKey(settingQueries.get('apiKey_openai'))
+      if (aKey) { apiKey = aKey; effectiveProvider = 'anthropic' }
+      else if (oKey) { apiKey = oKey; effectiveProvider = 'openai' }
+    }
+    const useLocal = !apiKey
+    if (apiKey.startsWith('tgp_')) effectiveProvider = 'together'
 
     const langLabel = targetLang === 'pt' ? 'Brazilian Portuguese' : 'English'
     const prompt = `Translate each of the following image generation prompt tags to ${langLabel}. Return ONLY a JSON array of strings in the same order, no explanation:\n${JSON.stringify(values)}`
 
     let raw = ''
-    if (effectiveProvider === 'anthropic') {
+    if (useLocal) {
+      raw = await localChat([{ role: 'user', content: prompt }])
+    } else if (effectiveProvider === 'anthropic') {
       const client = new Anthropic({ apiKey })
       const msg = await client.messages.create({
         model: 'claude-haiku-4-5-20251001',
@@ -359,6 +544,13 @@ Return ONLY the prompt, no introduction, no explanation:\n\n${prompt}`
   })
 
   ipcMain.handle('settings:setApiKey', (_e, provider: string, key: string) => {
+    // Chave em branco = remover. Guardamos '' (falsy) em vez do hex da string
+    // vazia criptografada — senão o `if (!encryptedKey)` dos handlers passa batido
+    // e o SDK acaba estourando um erro de auth confuso em vez de "not configured".
+    if (!key.trim()) {
+      settingQueries.set(`apiKey_${provider}`, '')
+      return true
+    }
     const encrypted = safeStorage.encryptString(key)
     settingQueries.set(`apiKey_${provider}`, encrypted.toString('hex'))
     return true
@@ -470,7 +662,7 @@ Return ONLY the prompt, no introduction, no explanation:\n\n${prompt}`
   })
 
   ipcMain.handle('node:createGroup', (_e, groupNode: {
-    id: string; canvasId: string; x: number; y: number; width: number; height: number
+    id: string; canvasId: string; x: number; y: number; width: number; height: number; label?: string
   }, childIds: string[]) => {
     nodeQueries.upsert({
       id: groupNode.id,
@@ -482,10 +674,17 @@ Return ONLY the prompt, no introduction, no explanation:\n\n${prompt}`
       height: groupNode.height,
       source: 'group',
       nodeType: 'group',
+      // Nome do grupo persistido em comfy_params (model_name já é usado pela cor).
+      comfyParams: groupNode.label ? JSON.stringify({ label: groupNode.label }) : undefined,
     })
     for (const childId of childIds) {
       nodeQueries.updateParent(childId, groupNode.id)
     }
+    return true
+  })
+
+  ipcMain.handle('node:updateGroupLabel', (_e, id: string, label: string) => {
+    nodeQueries.updateComfyParams(id, label ? JSON.stringify({ label }) : null)
     return true
   })
 

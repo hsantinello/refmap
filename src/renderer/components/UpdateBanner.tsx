@@ -47,20 +47,22 @@ export default function UpdateBanner() {
     <AnimatePresence>
       {visible && (
         <motion.div
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
+          initial={{ opacity: 0, y: -10, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: -10, scale: 0.96 }}
           transition={{ duration: 0.2 }}
-          className="flex items-center justify-between px-4 py-1.5 text-xs"
+          className="pointer-events-auto flex items-center gap-3 pl-4 pr-2 py-1.5 text-xs rounded-full"
           style={{
-            background: 'rgba(180, 30, 40, 0.18)',
-            borderBottom: '1px solid rgba(251, 146, 60, 0.2)',
+            background: 'rgba(18,18,20,0.92)',
+            backdropFilter: 'blur(12px)',
+            border: '1px solid rgba(251,146,60,0.22)',
+            boxShadow: '0 16px 40px rgba(0,0,0,0.5)',
           }}
         >
           <span className="text-white/70">
             {update.status === 'available' && (
               <>
-                Nova versão <span className="font-semibold" style={{ color: 'rgba(251,146,60,0.95)' }}>v{update.version}</span> disponível
+                Atualização disponível <span className="font-semibold" style={{ color: 'rgba(251,146,60,0.95)' }}>v{update.version}</span>
               </>
             )}
             {update.status === 'downloading' && (

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import logoUrl from '../../assets/logo.png'
+import UpdateBanner from '../UpdateBanner'
 
 const TERMS_TEXT = `TERMOS DE USO — REF MAP
 Última atualização: junho de 2026
@@ -71,18 +72,45 @@ export default function Auth() {
 
   const handleOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (otp.trim().length < 8) {
+      setError('Código incompleto, verifique novamente e coloque o código de 8 dígitos')
+      return
+    }
+
     setLoading(true)
     setError(null)
 
-    const { error } = await supabase.auth.verifyOtp({
-      email: email.toLowerCase().trim(),
-      token: otp.trim(),
-      type: 'email',
-    })
+    try {
+      // Timeout: se o cliente de auth estiver travado (ex.: sessão velha pendurada), não
+      // deixa o botão preso em "Verificando..." pra sempre — falha claro e a pessoa tenta de novo.
+      const { data, error } = await Promise.race([
+        supabase.auth.verifyOtp({ email: email.toLowerCase().trim(), token: otp.trim(), type: 'email' }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 15000)),
+      ])
 
-    setLoading(false)
-
-    if (error) { setError('Código inválido ou expirado. Tente novamente.'); return }
+      if (error) {
+        console.error('[login] verifyOtp falhou:', error)
+        const msg = (error.message || '').toLowerCase()
+        setError(
+          msg.includes('expired') || msg.includes('invalid') || msg.includes('token')
+            ? 'Código inválido ou expirado. Peça um novo código e digite na hora.'
+            : 'Não consegui entrar agora. Tente de novo em instantes.',
+        )
+        return
+      }
+      if (!data.session) {
+        // Verificou sem erro mas não veio sessão: estado inconsistente — não pode ficar mudo.
+        console.error('[login] verifyOtp retornou sem sessão')
+        setError('Login não concluído. Feche e reabra o app e tente de novo.')
+        return
+      }
+      // Sucesso — a tela troca sozinha via onAuthStateChange no App.
+    } catch (err) {
+      console.error('[login] verifyOtp timeout/exceção:', err)
+      setError('A verificação demorou demais. Confira sua internet e tente de novo.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleResend = async () => {
@@ -95,7 +123,7 @@ export default function Auth() {
 
   return (
     <div
-      className="flex h-screen items-center justify-center"
+      className="flex flex-col h-screen"
       style={{ background: 'radial-gradient(ellipse at 50% 40%, #0f0f12 0%, #09090b 50%, #060607 100%)' }}
     >
       {/* Terms modal */}
@@ -140,8 +168,15 @@ export default function Auth() {
         }
         .auth-input::placeholder { color: rgba(255,255,255,0.18); }
         .auth-input:focus { outline: none; border-color: rgba(249,115,22,0.45); background: rgba(255,255,255,0.06); }
+        .auth-checkbox:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(249,115,22,0.55); }
       `}</style>
 
+      {/* Banner de atualização — pill flutuante centralizado no topo */}
+      <div className="flex justify-center pt-3">
+        <UpdateBanner />
+      </div>
+
+      <div className="flex flex-1 items-center justify-center">
       <div
         className="auth-in flex flex-col items-center w-full max-w-[340px] mx-4 px-8 py-10"
         style={{
@@ -173,12 +208,24 @@ export default function Auth() {
               {/* Terms checkbox */}
               <div className="flex items-start gap-2.5 select-none">
                 <div
-                  className="w-4 h-4 rounded mt-0.5 shrink-0 flex items-center justify-center transition-all cursor-pointer"
+                  role="checkbox"
+                  aria-checked={termsAccepted}
+                  aria-label="Li e concordo com os Termos de Uso"
+                  tabIndex={0}
+                  className="auth-checkbox w-4 h-4 rounded mt-0.5 shrink-0 flex items-center justify-center transition-all cursor-pointer"
                   style={{
                     background: termsAccepted ? 'linear-gradient(135deg, #8f0e2e, #F97316)' : 'rgba(255,255,255,0.06)',
                     border: termsAccepted ? 'none' : '1px solid rgba(255,255,255,0.15)',
                   }}
                   onClick={() => setTermsAccepted(v => !v)}
+                  onKeyDown={e => {
+                    // Space/Enter marca a caixinha (como um checkbox nativo), sem rolar
+                    // a tela nem submeter o form.
+                    if (e.key === ' ' || e.key === 'Enter') {
+                      e.preventDefault()
+                      setTermsAccepted(v => !v)
+                    }
+                  }}
                 >
                   {termsAccepted && (
                     <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
@@ -190,6 +237,7 @@ export default function Auth() {
                   Li e concordo com os{' '}
                   <button
                     type="button"
+                    tabIndex={-1}
                     onClick={() => setShowTerms(true)}
                     className="text-orange-400/70 hover:text-orange-400 underline transition-colors"
                   >
@@ -213,15 +261,15 @@ export default function Auth() {
           <>
             <h1 className="text-white/85 text-[17px] font-semibold mb-1">Verifique seu e-mail</h1>
             <p className="text-white/25 text-[12px] mb-7 text-center">
-              Enviamos um código de 6 dígitos para<br />
+              Enviamos um código de 8 dígitos para<br />
               <span className="text-white/40">{email}</span>
             </p>
             <form onSubmit={handleOtpSubmit} className="w-full flex flex-col gap-3">
               <input
                 type="text"
-                placeholder="000000"
+                placeholder="00000000"
                 value={otp}
-                onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 8))}
                 required
                 autoFocus
                 inputMode="numeric"
@@ -234,9 +282,9 @@ export default function Auth() {
               )}
               <button
                 type="submit"
-                disabled={loading || otp.length !== 6}
+                disabled={loading}
                 className="w-full py-3 rounded-xl text-[13px] font-medium text-white transition-opacity"
-                style={{ background: 'linear-gradient(135deg, #8f0e2e, #F97316)', opacity: (loading || otp.length < 6) ? 0.5 : 1 }}
+                style={{ background: 'linear-gradient(135deg, #8f0e2e, #F97316)', opacity: loading ? 0.5 : 1 }}
               >
                 {loading ? 'Verificando...' : 'Entrar'}
               </button>
@@ -256,6 +304,7 @@ export default function Auth() {
             </button>
           </>
         )}
+      </div>
       </div>
     </div>
   )

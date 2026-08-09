@@ -21,11 +21,40 @@ const api = {
   openFilePicker: (): Promise<string[]> => ipcRenderer.invoke('image:openFilePicker'),
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 
+  // Vídeo → cenas
+  openVideoPicker: (): Promise<string | null> => ipcRenderer.invoke('video:openFilePicker'),
+  extractVideoScenes: (
+    videoPath: string,
+    opts?: { threshold?: number; maxScenes?: number; start?: number; end?: number; maxGap?: number },
+  ): Promise<{ frames: { index: number; framePath: string; timestamp: number }[]; capped: boolean; outDir: string }> =>
+    ipcRenderer.invoke('video:extractScenes', videoPath, opts),
+  // Captura manual de 1 quadro num tempo exato do vídeo
+  extractVideoFrame: (
+    videoPath: string,
+    timestamp: number,
+  ): Promise<{ index: number; framePath: string; timestamp: number }> =>
+    ipcRenderer.invoke('video:extractFrame', videoPath, timestamp),
+
   // Metadata
   extractMetadata: (imagePath: string) => ipcRenderer.invoke('image:extractMetadata', imagePath),
   analyzeWithAI: (imagePath: string, lang?: 'en' | 'pt', force?: boolean) => ipcRenderer.invoke('image:analyzeWithAI', imagePath, lang, force),
   createThumbnail: (imagePath: string): Promise<string> => ipcRenderer.invoke('image:createThumbnail', imagePath),
   readClipboardImage: (): Promise<string | null> => ipcRenderer.invoke('clipboard:readImage'),
+  copyImageToClipboard: (imagePath: string): Promise<boolean> => ipcRenderer.invoke('clipboard:writeImage', imagePath),
+  copyImageDataToClipboard: (data: Uint8Array): Promise<boolean> => ipcRenderer.invoke('clipboard:writeImageData', data),
+  writeTempImage: (data: Uint8Array): Promise<string> => ipcRenderer.invoke('image:writeTempImage', data),
+
+  // IA Local (Ollama)
+  getLocalStatus: (): Promise<{ ok: boolean; models: string[]; model: string }> => ipcRenderer.invoke('local:status'),
+  installLocalAI: (): Promise<boolean> => ipcRenderer.invoke('local:install'),
+  uninstallLocalAI: (): Promise<boolean> => ipcRenderer.invoke('local:uninstall'),
+  onLocalInstallProgress: (
+    cb: (p: { phase: string; percent: number; message: string; error?: string }) => void,
+  ) => {
+    const handler = (_e: Electron.IpcRendererEvent, p: { phase: string; percent: number; message: string; error?: string }) => cb(p)
+    ipcRenderer.on('local:installProgress', handler)
+    return () => ipcRenderer.off('local:installProgress', handler)
+  },
 
   // Settings
   getApiKey: (provider: string): Promise<string | null> => ipcRenderer.invoke('settings:getApiKey', provider),
@@ -49,6 +78,8 @@ const api = {
 
   // Prompt optimization
   optimizePrompt: (prompt: string, modelId: string): Promise<string> => ipcRenderer.invoke('prompt:optimize', prompt, modelId),
+  // Prompt de animação a partir de 2 imagens (first/last frame)
+  animatePrompt: (firstPath: string, lastPath: string): Promise<string> => ipcRenderer.invoke('prompt:animate', firstPath, lastPath),
 
   // Tag translation
   translateTags: (values: string[], targetLang: 'pt' | 'en'): Promise<string[]> => ipcRenderer.invoke('tags:translate', values, targetLang),
@@ -90,8 +121,9 @@ const api = {
   updateNodeSize: (id: string, width: number, height: number) => ipcRenderer.invoke('node:updateSize', id, width, height),
   deleteNode: (id: string) => ipcRenderer.invoke('node:delete', id),
   saveNodeTags: (nodeId: string, tags: unknown, tagLang?: 'en' | 'pt') => ipcRenderer.invoke('node:saveTags', nodeId, tags, tagLang),
-  createGroupNode: (groupNode: { id: string; canvasId: string; x: number; y: number; width: number; height: number }, childIds: string[]) =>
+  createGroupNode: (groupNode: { id: string; canvasId: string; x: number; y: number; width: number; height: number; label?: string }, childIds: string[]) =>
     ipcRenderer.invoke('node:createGroup', groupNode, childIds),
+  updateGroupLabel: (id: string, label: string) => ipcRenderer.invoke('node:updateGroupLabel', id, label),
   updateNodeParent: (id: string, parentId: string | null) => ipcRenderer.invoke('node:updateParent', id, parentId),
   deleteNodeWithChildren: (id: string) => ipcRenderer.invoke('node:deleteWithChildren', id),
 }
