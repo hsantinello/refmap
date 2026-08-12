@@ -14,6 +14,42 @@ import { getLocalConfig, getLocalTextConfig, localChat, isLocalUnavailable, LOCA
 import { installLocalAI, uninstallLocal } from '../ai/localInstall'
 import { extractScenes, extractFrameAt } from '../video/extractScenes'
 
+// ── Detecção de idioma na saída da otimização ────────────────────────────────
+// Palavras funcionais de pt/es que NÃO existem em inglês. Homógrafos ficam de fora
+// de propósito ("a", "as", "o", "os", "no", "um", "so", "ate", "sin", "hay", "son",
+// "do", "la", "me") — senão prompt em inglês pontuaria sozinho.
+const PT_ES_STOPWORDS = new Set([
+  'de', 'da', 'das', 'dos', 'que', 'uma', 'umas', 'uns', 'com', 'para', 'não', 'nao',
+  'pra', 'pro', 'ele', 'ela', 'eles', 'elas', 'seu', 'sua', 'seus', 'suas', 'dele',
+  'dela', 'mais', 'muito', 'muita', 'muitos', 'muitas', 'está', 'esta', 'estão',
+  'então', 'entao', 'enquanto', 'quando', 'onde', 'como', 'porque', 'pelo', 'pela',
+  'pelos', 'pelas', 'também', 'tambem', 'você', 'voce', 'vocês', 'voces', 'aos',
+  'nas', 'nos', 'num', 'numa', 'isso', 'esse', 'essa', 'este', 'ser', 'são', 'sao',
+  'foi', 'tem', 'têm', 'ter', 'faz', 'fazer', 'sendo', 'toda', 'todos', 'todas',
+  'cada', 'sobre', 'entre', 'sem', 'depois', 'antes', 'agora', 'ainda', 'já', 'ja',
+  'mas', 'porém', 'porem', 'assim', 'qual', 'quais', 'alguns', 'algumas', 'outro',
+  'outra', 'outros', 'outras', 'mesma', 'sempre', 'nunca', 'aqui', 'ao', 'às', 'é',
+  'ou', 'seja', 'durante', 'através', 'atraves', 'enquanto', 'logo',
+  'los', 'las', 'una', 'con', 'por', 'pero', 'muy', 'desde', 'hacia', 'aunque',
+  'ese', 'esa', 'esto',
+])
+
+// Quanto o texto "cheira" a português/espanhol FORA das aspas. O que está entre
+// aspas é fala ou texto de tela e, por regra, fica no idioma original — não conta.
+// Retorna 0 quando não há sinal suficiente para afirmar nada.
+function nonEnglishScore(text: string): number {
+  const stripped = text
+    .replace(/"[^"]*"/g, ' ')
+    .replace(/[“”][^“”]*[“”]/g, ' ')
+  const words = stripped.toLowerCase().match(/[a-zà-öø-ÿ]+/g) ?? []
+  if (words.length < 8) return 0
+  const hits = words.filter(w => PT_ES_STOPWORDS.has(w)).length
+  const accents = (stripped.match(/[áàâãéêíóôõúüç]/gi) ?? []).length
+  if (hits < 3 && accents < 3) return 0
+  return (hits + accents) / words.length
+}
+const NON_ENGLISH_THRESHOLD = 0.06
+
 export function registerHandlers(win: BrowserWindow): void {
   // ── Window controls ────────────────────────────────────────────────────
   ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url))
@@ -334,52 +370,115 @@ export function registerHandlers(win: BrowserWindow): void {
       ? `\n\nDEFAULT STYLE: if the user did NOT specify an artistic style, medium or aesthetic, make the image photorealistic — realistic photography, natural lighting, true-to-life detail and texture. Only use a non-realistic style (illustration, anime, painting, 3D render, graphic, etc.) when the user explicitly asked for it.`
       : ''
 
-    const userMsg = `Optimize this prompt for ${config.label}. Write the descriptive prompt in English only, regardless of the input language — EXCEPT for literal spoken lines and text-to-render, which follow the VERBATIM rule below.
+    // Idioma da saída — por modelo. Default 'en' mantém exatamente o texto de antes.
+    const lang = config.outputLanguage ?? 'en'
+    const strictEN = lang === 'en-strict'
 
-VERBATIM TEXT — HIGHEST PRIORITY: If the user gives words that a person/character/subject SPEAKS or SAYS (dialogue, voice-over, narration), or literal TEXT TO BE DISPLAYED in the image/video (speech bubble, sign, caption, title, subtitle, label, on-screen text), reproduce that text EXACTLY word-for-word, wrapped in double quotes, in the SAME language the user wrote it. Never translate it, paraphrase it, summarize it, rephrase it, correct it, shorten it or drop it. Only the surrounding description gets translated to English; the quoted spoken/displayed text must stay intact exactly as written.
+    // 'en-strict': a regra de idioma entra no topo (prioridade) e é repetida colada
+    // no prompt do usuário (recência) — os dois pontos que o modelo mais pesa.
+    const languageHeader = strictEN
+      ? `LANGUAGE — NON-NEGOTIABLE, THIS OVERRIDES EVERY OTHER RULE BELOW: the optimized prompt MUST be written in English, whatever language the user wrote in. ${config.label} performs dramatically worse in any other language. Translate EVERY descriptive element into English — subject, action, scene, camera, lens, lighting, mood, style, transitions, shot-list labels, negative direction, preserve-lists, SFX, music and audio direction. The ONLY text that keeps the user's original language is text inside double quotes that a character SPEAKS or that is DISPLAYED on screen (see VERBATIM below). If any descriptive sentence comes out in the user's language, it is WRONG — write it in English.\n\n`
+      : ''
+
+    const openingLine = lang === 'source'
+      ? `Optimize this prompt for ${config.label}. Write it in the SAME language the user wrote it in.`
+      : `Optimize this prompt for ${config.label}. Write the descriptive prompt in English only, regardless of the input language — EXCEPT for literal spoken lines and text-to-render, which follow the VERBATIM rule below.`
+
+    // Sem isso a exceção VERBATIM vaza e leva a descrição inteira junto.
+    const verbatimScope = strictEN
+      ? ` This exception is NARROW: it covers ONLY the quoted words themselves. Everything around them — the speaker's name, the tone, the action tied to the line, the SFX/music/audio description and the instruction about where the on-screen text appears — is written in English.`
+      : ''
+
+    // Última instrução antes do prompt do usuário — é a que mais pesa na saída.
+    const closing = strictEN
+      ? `Return ONLY the prompt, no introduction, no explanation.\n\nFINAL CHECK BEFORE YOU WRITE: every descriptive word of your answer must be in English — subject, action, camera, lighting, mood, audio and SFX included. Only text inside double quotes that is spoken aloud or shown on screen may stay in another language. The user's prompt follows:`
+      : `Return ONLY the prompt, no introduction, no explanation:`
+
+    const userMsg = `${languageHeader}${openingLine}
+
+VERBATIM TEXT — HIGHEST PRIORITY: If the user gives words that a person/character/subject SPEAKS or SAYS (dialogue, voice-over, narration), or literal TEXT TO BE DISPLAYED in the image/video (speech bubble, sign, caption, title, subtitle, label, on-screen text), reproduce that text EXACTLY word-for-word, wrapped in double quotes, in the SAME language the user wrote it. Never translate it, paraphrase it, summarize it, rephrase it, correct it, shorten it or drop it. Only the surrounding description gets translated to English; the quoted spoken/displayed text must stay intact exactly as written.${verbatimScope}
 
 CORE OBJECTIVE — REFORMAT, DO NOT INVENT (as important as the VERBATIM rule above): Your ONLY job is to take the user's prompt and RE-EXPRESS the exact same idea in the structure, order and technical vocabulary that ${config.label} understands best. You are a FORMATTER, not a co-writer. The optimized prompt must describe the SAME scene the user wrote — same subjects, same actions, same setting — nothing added, nothing removed.
 - Keep ALL of the user's content: every subject, attribute, action, setting, style and detail they wrote must survive.
 - Do NOT add any new information the user did not write or unambiguously imply: no new subjects, characters, objects, actions, poses, backstory, locations, time of day, weather, colors, clothing, camera angles, lens, lighting, mood, emotions or artistic style. Do not "enrich", "elevate", dramatize or embellish. Every visual element in your output must trace back to something the user actually wrote. (The ONLY permitted style choice is the DEFAULT STYLE rule below, and only when the user specified no style at all.)
 - You MAY only reorganize, clarify and translate the user's words into the target format, plus the minimal structural/technical phrasing the format itself requires — but that phrasing must NOT introduce new scene content.
 - The prompt guides/examples for this model show you the FORMAT and structure to follow — do NOT copy their invented level of detail onto the user's prompt. Match their shape, not their content.
-- When unsure whether a detail is implied, LEAVE IT OUT and keep the user's own wording.
+- When unsure whether a detail is implied, LEAVE IT OUT and keep the user's own ${strictEN ? 'meaning, translated to English' : 'wording'}.
 The result must be a faithful, well-formatted version of THE USER'S prompt: same scene, better structure — never a richer, more elaborate or different creative concept.${realismDefault}
 
-Return ONLY the prompt, no introduction, no explanation:\n\n${prompt}`
+${closing}\n\n${prompt}`
 
-    if (useLocal) {
-      // IA local (Ollama) — erros de conexão viram LOCAL_AI_UNAVAILABLE.
-      const raw = await localChat([
-        { role: 'system', content: config.systemPrompt },
-        { role: 'user', content: userMsg },
-      ])
-      return cleanPrompt(stripIntro(raw.replace(/\\n/g, '\n')))
-    } else if (effectiveProvider === 'anthropic') {
-      const client = new Anthropic({ apiKey })
-      const message = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 2048,
-        system: config.systemPrompt,
-        messages: [{ role: 'user', content: userMsg }],
-      })
-      const block = message.content[0]
-      const raw = block?.type === 'text' ? block.text.trim() : ''
-      return cleanPrompt(stripIntro(raw.replace(/\\n/g, '\n')))
-    } else {
-      const client = effectiveProvider === 'together'
-        ? new OpenAI({ apiKey, baseURL: 'https://api.together.xyz/v1' })
-        : new OpenAI({ apiKey })
-      const model = effectiveProvider === 'together' ? 'meta-llama/Llama-3.3-70B-Instruct-Turbo' : 'gpt-4o-mini'
-      const completion = await client.chat.completions.create({
-        model,
-        messages: [
-          { role: 'system', content: config.systemPrompt },
-          { role: 'user', content: userMsg },
-        ],
-      })
-      return cleanPrompt(stripIntro((completion.choices[0].message.content?.trim() ?? '').replace(/\\n/g, '\n')))
+    // Reforço no nível do system também — o systemPrompt do modelo é longo e a
+    // regra de idioma dele fica lá no fim, competindo com o resto.
+    const systemPrompt = strictEN
+      ? `${config.systemPrompt}\n\nABSOLUTE LANGUAGE RULE: your entire answer is written in English. Whatever language the incoming prompt is in, every descriptive word you write is English. The only exception is text inside double quotes that a character speaks aloud or that is displayed on screen — that keeps the user's original wording and language.`
+      : config.systemPrompt
+
+    const runChat = async (system: string, user: string): Promise<string> => {
+      if (useLocal) {
+        // IA local (Ollama) — erros de conexão viram LOCAL_AI_UNAVAILABLE.
+        return await localChat([
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ])
+      } else if (effectiveProvider === 'anthropic') {
+        const client = new Anthropic({ apiKey })
+        const message = await client.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 2048,
+          system,
+          messages: [{ role: 'user', content: user }],
+        })
+        const block = message.content[0]
+        return block?.type === 'text' ? block.text.trim() : ''
+      } else {
+        const client = effectiveProvider === 'together'
+          ? new OpenAI({ apiKey, baseURL: 'https://api.together.xyz/v1' })
+          : new OpenAI({ apiKey })
+        const model = effectiveProvider === 'together' ? 'meta-llama/Llama-3.3-70B-Instruct-Turbo' : 'gpt-4o-mini'
+        const completion = await client.chat.completions.create({
+          model,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+        })
+        return completion.choices[0].message.content?.trim() ?? ''
+      }
     }
+
+    const finalize = (raw: string): string => cleanPrompt(stripIntro(raw.replace(/\\n/g, '\n')))
+
+    const result = finalize(await runChat(systemPrompt, userMsg))
+
+    // Rede de segurança do 'en-strict': se ainda voltou em português/espanhol,
+    // uma passada extra traduz só as partes descritivas. Não roda quando já veio
+    // em inglês, então o custo normal continua sendo uma chamada só.
+    if (strictEN) {
+      const score = nonEnglishScore(result)
+      if (score > NON_ENGLISH_THRESHOLD) {
+        try {
+          const fixed = finalize(await runChat(
+            `You are a precise translator for AI image/video generation prompts. You never restructure, never add and never remove content — you only change the language of the descriptive parts to English.`,
+            `The text below is a generation prompt that was supposed to be entirely in English, but parts of it came out in another language. Rewrite it in English.
+
+RULES:
+- Keep the EXACT same structure: same line breaks, same blank lines, same section labels, same timecodes ([0-2 seconds]), same order. Do not reorganize, shorten, expand or add anything.
+- Translate every descriptive part into natural English prompt language.
+- Text inside double quotes that a character speaks aloud or that is displayed on screen must stay EXACTLY as it is, in its original language — never translate what is inside those quotes.
+- Return ONLY the rewritten prompt, no introduction, no explanation:
+
+${result}`,
+          ))
+          // Só troca se de fato melhorou — nunca devolve algo pior que o original.
+          if (fixed && nonEnglishScore(fixed) < score) return fixed
+        } catch (err) {
+          console.error('[optimize] retradução para inglês falhou:', err)
+        }
+      }
+    }
+
+    return result
   })
 
   // ── Prompt de animação (first/last frame) ─────────────────────────────

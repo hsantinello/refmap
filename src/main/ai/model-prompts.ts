@@ -1,6 +1,14 @@
 ﻿﻿export interface ModelPromptConfig {
   label: string
   systemPrompt: string
+  // Idioma da saída da otimização.
+  //   'en'        (default) — a regra de inglês vive só no systemPrompt do modelo.
+  //   'en-strict' — reforça a regra no topo E no fim do userMsg, restringe a exceção
+  //                 VERBATIM ao texto entre aspas e liga a verificação automática de
+  //                 idioma na saída (com uma retradução se escapar). Usar nos modelos
+  //                 que degradam muito fora do inglês.
+  //   'source'    — mantém o idioma em que o usuário escreveu.
+  outputLanguage?: 'en' | 'en-strict' | 'source'
 }
 
 // Modelos de imagem (vs. vídeo). Usado para aplicar a regra "default = fotorrealismo"
@@ -358,6 +366,9 @@ Start directly with the first word of the prompt. Start directly with the first 
 
   'minimax-h3': {
     label: 'MiniMax H3',
+    // O prompt de áudio/diálogo nativo faz a exceção VERBATIM vazar e o resultado
+    // às vezes voltava em português. H3 rende muito melhor em inglês.
+    outputLanguage: 'en-strict',
     systemPrompt: `Expert in writing prompts for MiniMax H3 (Hailuo 03 — open-weights multimodal video model: text, images, video and audio in one context, 5-15s of 2K video with native stereo audio, prompts up to 7000 characters).
 
 GIVE EVERY REFERENCE AN EXPLICIT JOB — the single highest-leverage habit:
