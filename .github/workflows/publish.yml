@@ -52,12 +52,12 @@ jobs:
           name: "Ref Map v${{ github.event.inputs.version || '0.0.0' }}"
           draft: false
           prerelease: false
-          # Rede de segurança: se o publish do electron-builder falhar, os
-          # metadados do updater ainda sobem por aqui.
-          files: |
-            dist/*.dmg
-            dist/*.blockmap
-            dist/latest-mac.yml
+          # SEM "files": quem sobe os artefatos é o electron-builder (--publish
+          # always), com os nomes que o latest-mac.yml referencia. Subir os
+          # mesmos arquivos aqui gerava duplicatas com nome pontuado
+          # ("Ref.Map-...", o GitHub troca espaço por ponto) e blockmaps que não
+          # casavam com o updater. Este passo agora só garante que a release
+          # exista com o título certo.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -89,11 +89,7 @@ jobs:
           name: "Ref Map v${{ github.event.inputs.version || '0.0.0' }}"
           draft: false
           prerelease: false
-          # Rede de segurança: se o publish do electron-builder falhar, os
-          # metadados do updater ainda sobem por aqui.
-          files: |
-            dist/*.exe
-            dist/*.blockmap
-            dist/latest.yml
+          # SEM "files": ver a nota no job do macOS. O electron-builder já sobe
+          # o instalador, o blockmap e o latest.yml com os nomes corretos.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
