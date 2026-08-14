@@ -75,19 +75,51 @@ async function downloadFile(url: string, dest: string, onPercent: (pct: number) 
   } finally {
     fileStream.end()
   }
+  // ATENÇÃO: esperar 'finish' NÃO basta. 'finish' só diz que os bytes foram
+  // entregues ao SO — o descritor de arquivo ainda está aberto. Executar o .exe
+  // nesse intervalo dá "spawn EBUSY" no Windows. 'close' é o evento que garante
+  // o handle liberado.
   await new Promise<void>((resolve, reject) => {
-    fileStream.on('finish', () => resolve())
+    fileStream.on('close', () => resolve())
     fileStream.on('error', reject)
   })
 }
 
+// Erros do Windows quando o arquivo está travado por outro processo — tipicamente
+// o antivírus escaneando o .exe recém-baixado.
+function isFileLockError(err: unknown): boolean {
+  const code = (err as { code?: string })?.code
+  return code === 'EBUSY' || code === 'EPERM' || code === 'EACCES' || code === 'ETXTBSY'
+}
+
 function runSilentInstaller(installerPath: string): Promise<void> {
-  return new Promise((resolve, reject) => {
+  const attempt = (): Promise<void> => new Promise((resolve, reject) => {
     // Instalador do Ollama é Inno Setup → flags silenciosas, instala por-usuário (sem UAC).
     const proc = spawn(installerPath, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'], { windowsHide: true })
     proc.on('error', reject)
     proc.on('exit', code => code === 0 ? resolve() : reject(new Error(`Instalador saiu com código ${code}`)))
   })
+
+  // O Defender abre o .exe recém-baixado para escanear e o mantém travado por
+  // alguns segundos; spawn nessa janela devolve EBUSY. Em vez de falhar na cara
+  // do usuário, esperamos e tentamos de novo (até ~13s no total).
+  return (async () => {
+    const waits = [1000, 2000, 4000, 6000]
+    for (let i = 0; ; i++) {
+      try {
+        return await attempt()
+      } catch (err) {
+        if (!isFileLockError(err)) throw err
+        if (i >= waits.length) {
+          throw new Error(
+            'O instalador do Ollama ficou bloqueado por outro programa (normalmente o antivírus). ' +
+            'Aguarde alguns segundos e clique em "Tentar de novo".',
+          )
+        }
+        await new Promise(r => setTimeout(r, waits[i]))
+      }
+    }
+  })()
 }
 
 async function pullModel(root: string, model: string, onProgress: (pct: number, status: string) => void): Promise<void> {
@@ -191,7 +223,11 @@ export async function uninstallLocal(win: BrowserWindow): Promise<void> {
     send(win, { phase: 'uninstalling', percent: -1, message: 'Removendo o Ollama…' })
     // O desinstalador do Inno se copia pro temp e sai cedo — não confiamos no exit;
     // esperamos o ollama.exe sumir do disco (= desinstalação realmente concluída).
-    spawn(uninstaller, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'], { windowsHide: true })
+    // Sem um listener de 'error', uma falha do spawn (EBUSY/ENOENT) vira exceção
+    // não tratada e derruba o processo principal. Aqui a falha é detectada pelo
+    // waitUntilGone abaixo, então basta registrar.
+    const unins = spawn(uninstaller, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'], { windowsHide: true })
+    unins.on('error', e => console.error('[uninstall] spawn do desinstalador falhou:', e))
     const target = (ollamaExe && fs.existsSync(ollamaExe)) ? ollamaExe : uninstaller
     const gone = await waitUntilGone(target, 90_000)
     console.log('[uninstall] concluído =', gone, '| alvo =', target)
@@ -227,7 +263,11 @@ export async function installLocalAI(win: BrowserWindow): Promise<void> {
       const exe = existingOllamaExe()
       if (exe) {
         send(win, { phase: 'starting', percent: -1, message: 'Iniciando Ollama…' })
-        spawn(exe, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+        // Idem: sem listener de 'error' um EBUSY aqui derrubaria o processo
+        // principal. A falha é coberta pelo waitForOllama logo abaixo.
+        const srv = spawn(exe, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true })
+        srv.on('error', e => console.error('[install] spawn do "ollama serve" falhou:', e))
+        srv.unref()
         up = await waitForOllama(root, 20_000)
       }
     }
@@ -239,7 +279,15 @@ export async function installLocalAI(win: BrowserWindow): Promise<void> {
       }
       const dir = path.join(app.getPath('temp'), 'refmap-ollama')
       fs.mkdirSync(dir, { recursive: true })
-      const installerPath = path.join(dir, 'OllamaSetup.exe')
+      // Um instalador travado por uma tentativa anterior faria o createWriteStream
+      // falhar com EBUSY e o "Tentar de novo" nunca sairia do lugar. Removemos o
+      // antigo; se ele estiver preso, escrevemos num nome novo em vez de insistir.
+      let installerPath = path.join(dir, 'OllamaSetup.exe')
+      try {
+        fs.rmSync(installerPath, { force: true })
+      } catch {
+        installerPath = path.join(dir, `OllamaSetup-${Date.now()}.exe`)
+      }
 
       send(win, { phase: 'downloading', percent: 0, message: 'Baixando Ollama…' })
       await downloadFile(OLLAMA_INSTALLER_URL, installerPath, pct =>

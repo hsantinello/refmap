@@ -1,6 +1,7 @@
 import { Fragment, useState, useRef, useEffect, forwardRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { createPortal } from 'react-dom'
+import { friendlyError } from '../../lib/friendlyError'
 import {
   DndContext,
   rectIntersection,
@@ -724,6 +725,9 @@ export default function PromptBuilder() {
   const [optEstimate, setOptEstimate] = useState<number | null>(null) // estimativa (s)
   const optTimerRef = useRef<ReturnType<typeof setInterval>>(undefined)
   const [optimizeError, setOptimizeError] = useState<string | null>(null)
+  // O botão trunca em 200px, então ele mostra só o "o que houve" e a solução
+  // vai no tooltip — junto do texto técnico, para suporte.
+  const [optimizeErrorHelp, setOptimizeErrorHelp] = useState<string | null>(null)
   // Falta de configuração ao otimizar (sem chave e IA local indisponível) →
   // mostramos um botão-CTA com a orientação certa, em vez do erro cru do IPC.
   // null = tudo ok; string = mensagem a exibir no CTA (clicável → Settings).
@@ -899,6 +903,7 @@ export default function PromptBuilder() {
 
     setOptimizing(true)
     setOptimizeError(null)
+    setOptimizeErrorHelp(null)
     setSetupHint(null)
     // Cronômetro + estimativa adaptativa (média das últimas otimizações).
     const startedAt = Date.now()
@@ -934,17 +939,19 @@ export default function PromptBuilder() {
       if (msg.includes('LOCAL_AI_UNAVAILABLE')) {
         pendingModelRef.current = modelId
         setTargetModel(null)
-        setSetupHint('A otimização falhou, clique aqui para configurar a IA')
+        setSetupHint('A IA local não está rodando. Clique para configurar')
       } else if (msg.includes('API key not configured')) {
         pendingModelRef.current = modelId
         setTargetModel(null)
         setSetupHint('Para aprimorar um prompt configure sua API')
       } else {
-        // Qualquer outra falha → CTA clicável que leva às configurações da IA
-        // (o erro técnico fica no console para depuração).
-        pendingModelRef.current = modelId
-        setTargetModel(null)
-        setSetupHint('A otimização falhou, clique aqui para configurar a IA')
+        // Demais falhas (limite de uso, chave recusada, provedor fora do ar,
+        // sem internet…): antes caíam todas num CTA genérico de "configure a
+        // IA", que mandava o usuário para o lugar errado. Agora dizemos o que
+        // de fato aconteceu e o que ele pode fazer.
+        const f = friendlyError(err, 'Não foi possível aprimorar o prompt.')
+        setOptimizeError(f.message)
+        setOptimizeErrorHelp([f.action, f.technical].filter(Boolean).join('\n\n'))
       }
     } finally {
       setOptimizing(false)
@@ -1013,6 +1020,7 @@ export default function PromptBuilder() {
                   }
                   setShowModels(v => !v)
                 }}
+                title={optimizeError ? [optimizeError, optimizeErrorHelp].filter(Boolean).join('\n\n') : undefined}
                 className={`flex items-center gap-1.5 text-[11px] transition-colors px-2 py-1 rounded-md ${setupHint ? 'cursor-pointer' : 'max-w-[200px] truncate'} ${
                   setupHint
                     ? 'text-red-400/90 hover:text-red-300 bg-red-500/[0.12] hover:bg-red-500/[0.20]'

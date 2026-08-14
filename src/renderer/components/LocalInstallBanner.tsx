@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion'
+import { friendlyError } from '../lib/friendlyError'
 
 export interface LocalInstallProgress {
   phase: string
@@ -13,6 +14,9 @@ export default function LocalInstallBanner({ progress }: { progress: LocalInstal
   const { phase, percent, message, error } = progress
   const isError = phase === 'error'
   const isDone = phase === 'done'
+  // A pílula é estreita e trunca: mostramos só a frase do "o que houve" e
+  // deixamos a solução + o texto técnico no tooltip.
+  const friendly = isError ? friendlyError(error, 'Não foi possível instalar a IA local.') : null
 
   return (
     <motion.div
@@ -28,9 +32,12 @@ export default function LocalInstallBanner({ progress }: { progress: LocalInstal
         boxShadow: '0 16px 40px rgba(0,0,0,0.5)',
       }}
     >
-      <span className="text-white/70 truncate">
+      <span
+        className="text-white/70 truncate"
+        title={friendly ? [friendly.message, friendly.action, friendly.technical].filter(Boolean).join('\n\n') : undefined}
+      >
         {isError
-          ? (error || 'Falha ao instalar a IA local')
+          ? friendly!.message
           : isDone
             ? 'IA local pronta!'
             : <>IA Local · <span className="text-white/50">{message}</span></>}

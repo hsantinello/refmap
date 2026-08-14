@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { LocalInstallProgress } from '../LocalInstallBanner'
+import { friendlyError } from '../../lib/friendlyError'
 
 type View = 'choose' | 'api' | 'local'
 
@@ -138,9 +139,18 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
         {installProgress && installProgress.phase !== 'done' && (
           <div style={{ padding: '0 15px 12px' }}>
             {installProgress.phase === 'error' ? (
-              <div className="rounded-lg p-2.5" style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.22)' }}>
-                <p className="text-[11px] text-red-400/75">{installProgress.error || 'Falha ao instalar a IA local.'}</p>
-              </div>
+              (() => {
+                // Nunca mostramos o erro cru ("spawn EBUSY"): o tradutor devolve
+                // o que aconteceu e o que o usuário pode fazer. O texto técnico
+                // fica no title, para suporte.
+                const f = friendlyError(installProgress.error, 'Não foi possível instalar a IA local.')
+                return (
+                  <div className="rounded-lg p-2.5" title={f.technical} style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.22)' }}>
+                    <p className="text-[11px] text-red-400/90">{f.message}</p>
+                    {f.action && <p className="text-[11px] text-white/45 mt-1">{f.action}</p>}
+                  </div>
+                )
+              })()
             ) : (
               <div className="rounded-lg p-2.5" style={{ background: 'rgba(249,115,22,0.08)', border: '1px solid rgba(249,115,22,0.18)' }}>
                 <div className="flex items-center justify-between text-[11px] mb-1">

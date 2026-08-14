@@ -14,42 +14,6 @@ import { getLocalConfig, getLocalTextConfig, localChat, isLocalUnavailable, LOCA
 import { installLocalAI, uninstallLocal } from '../ai/localInstall'
 import { extractScenes, extractFrameAt } from '../video/extractScenes'
 
-// ── Detecção de idioma na saída da otimização ────────────────────────────────
-// Palavras funcionais de pt/es que NÃO existem em inglês. Homógrafos ficam de fora
-// de propósito ("a", "as", "o", "os", "no", "um", "so", "ate", "sin", "hay", "son",
-// "do", "la", "me") — senão prompt em inglês pontuaria sozinho.
-const PT_ES_STOPWORDS = new Set([
-  'de', 'da', 'das', 'dos', 'que', 'uma', 'umas', 'uns', 'com', 'para', 'não', 'nao',
-  'pra', 'pro', 'ele', 'ela', 'eles', 'elas', 'seu', 'sua', 'seus', 'suas', 'dele',
-  'dela', 'mais', 'muito', 'muita', 'muitos', 'muitas', 'está', 'esta', 'estão',
-  'então', 'entao', 'enquanto', 'quando', 'onde', 'como', 'porque', 'pelo', 'pela',
-  'pelos', 'pelas', 'também', 'tambem', 'você', 'voce', 'vocês', 'voces', 'aos',
-  'nas', 'nos', 'num', 'numa', 'isso', 'esse', 'essa', 'este', 'ser', 'são', 'sao',
-  'foi', 'tem', 'têm', 'ter', 'faz', 'fazer', 'sendo', 'toda', 'todos', 'todas',
-  'cada', 'sobre', 'entre', 'sem', 'depois', 'antes', 'agora', 'ainda', 'já', 'ja',
-  'mas', 'porém', 'porem', 'assim', 'qual', 'quais', 'alguns', 'algumas', 'outro',
-  'outra', 'outros', 'outras', 'mesma', 'sempre', 'nunca', 'aqui', 'ao', 'às', 'é',
-  'ou', 'seja', 'durante', 'através', 'atraves', 'enquanto', 'logo',
-  'los', 'las', 'una', 'con', 'por', 'pero', 'muy', 'desde', 'hacia', 'aunque',
-  'ese', 'esa', 'esto',
-])
-
-// Quanto o texto "cheira" a português/espanhol FORA das aspas. O que está entre
-// aspas é fala ou texto de tela e, por regra, fica no idioma original — não conta.
-// Retorna 0 quando não há sinal suficiente para afirmar nada.
-function nonEnglishScore(text: string): number {
-  const stripped = text
-    .replace(/"[^"]*"/g, ' ')
-    .replace(/[“”][^“”]*[“”]/g, ' ')
-  const words = stripped.toLowerCase().match(/[a-zà-öø-ÿ]+/g) ?? []
-  if (words.length < 8) return 0
-  const hits = words.filter(w => PT_ES_STOPWORDS.has(w)).length
-  const accents = (stripped.match(/[áàâãéêíóôõúüç]/gi) ?? []).length
-  if (hits < 3 && accents < 3) return 0
-  return (hits + accents) / words.length
-}
-const NON_ENGLISH_THRESHOLD = 0.06
-
 export function registerHandlers(win: BrowserWindow): void {
   // ── Window controls ────────────────────────────────────────────────────
   ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url))
@@ -366,8 +330,11 @@ export function registerHandlers(win: BrowserWindow): void {
       return result
     }
 
+    // Antes esta regra dizia "natural lighting", que é CONTEÚDO DE CENA e acabava
+    // autorizando o modelo a inventar iluminação que o usuário não pediu. Agora ela
+    // define só o registro de renderização, e nunca vale para uma edição.
     const realismDefault = IMAGE_MODEL_IDS.has(modelId)
-      ? `\n\nDEFAULT STYLE: if the user did NOT specify an artistic style, medium or aesthetic, make the image photorealistic — realistic photography, natural lighting, true-to-life detail and texture. Only use a non-realistic style (illustration, anime, painting, 3D render, graphic, etc.) when the user explicitly asked for it.`
+      ? `\n\nDEFAULT STYLE: if the user did NOT specify an artistic style, medium or aesthetic, render it photorealistic — real photography, true-to-life detail and texture. This is a RENDERING STYLE only: it lets you say the image is photographic, it does NOT let you add lighting, a setting, a camera, a mood or any other scene content the user did not write. Only use a non-realistic style (illustration, anime, painting, 3D render, graphic, etc.) when the user explicitly asked for it. Skip this rule entirely when the user is editing an existing image.`
       : ''
 
     // Idioma da saída — por modelo. Default 'en' mantém exatamente o texto de antes.
@@ -390,9 +357,13 @@ export function registerHandlers(win: BrowserWindow): void {
       : ''
 
     // Última instrução antes do prompt do usuário — é a que mais pesa na saída.
+    // Checagem de escopo colada no prompt do usuário: é a última coisa lida antes
+    // dele escrever, a posição de maior peso na saída.
+    const scopeCheck = `FINAL CHECK ON SCOPE: list to yourself the things the user actually named. Your answer may not contain a single subject, person, place, object, action, light source or camera move beyond that list. If the user named only an object, no human appears in your answer. If the user is editing something that already exists, answer with the change only — never with a scene.`
+
     const closing = strictEN
-      ? `Return ONLY the prompt, no introduction, no explanation.\n\nFINAL CHECK BEFORE YOU WRITE: every descriptive word of your answer must be in English — subject, action, camera, lighting, mood, audio and SFX included. Only text inside double quotes that is spoken aloud or shown on screen may stay in another language. The user's prompt follows:`
-      : `Return ONLY the prompt, no introduction, no explanation:`
+      ? `Return ONLY the prompt, no introduction, no explanation.\n\n${scopeCheck}\n\nFINAL CHECK ON LANGUAGE: every descriptive word of your answer must be in English — subject, action, camera, lighting, mood, audio and SFX included. Only text inside double quotes that is spoken aloud or shown on screen may stay in another language. The user's prompt follows:`
+      : `Return ONLY the prompt, no introduction, no explanation.\n\n${scopeCheck}\n\nThe user's prompt follows:`
 
     const userMsg = `${languageHeader}${openingLine}
 
@@ -408,11 +379,33 @@ The result must be a faithful, well-formatted version of THE USER'S prompt: same
 
 ${closing}\n\n${prompt}`
 
-    // Reforço no nível do system também — o systemPrompt do modelo é longo e a
-    // regra de idioma dele fica lá no fim, competindo com o resto.
-    const systemPrompt = strictEN
-      ? `${config.systemPrompt}\n\nABSOLUTE LANGUAGE RULE: your entire answer is written in English. Whatever language the incoming prompt is in, every descriptive word you write is English. The only exception is text inside double quotes that a character speaks aloud or that is displayed on screen — that keeps the user's original wording and language.`
-      : config.systemPrompt
+    // O systemPrompt de cada modelo é um guia de "como escrever um prompt rico",
+    // com SEÇÕES OBRIGATÓRIAS (cena, luz, câmera, áudio…). Quando o usuário não dá
+    // material para uma seção, o modelo INVENTA para conseguir preenchê-la — foi o
+    // que gerava mulher/sala/luz âmbar a partir de "editar a roupa com textura
+    // realista". A regra de não inventar existia só na mensagem do usuário e perdia
+    // para o mandato estrutural daqui. Este override entra no MESMO nível do
+    // mandato, para desarmá-lo.
+    const scopeOverride = `SCOPE — THIS RULE OUTRANKS EVERY STRUCTURAL INSTRUCTION ABOVE.
+
+AUTHORITY: the user's text is the sole authority over CONTENT — what exists, who is there, what happens. Everything above this line is authority over FORM only: wording, ordering, technical vocabulary. When form and content disagree, content wins and the form bends. Never the other way around.
+
+The sections, element lists, formulas and examples above describe the FULL vocabulary this model understands. They are a MENU to choose from, never a checklist to complete.
+- Fill ONLY the parts the user actually gave material for. If the user said nothing about camera, framing, lens, lighting, location, time of day, weather, mood, audio or style, those parts DO NOT appear in your output. Omitting a section is CORRECT; inventing content to fill it is a FAILURE.
+- Any minimum length, sentence count or "cover all N elements" instruction above is void when the user's prompt does not contain that much. A short request stays short — a single sentence is a valid answer.
+- Never introduce a person, place, object, action, pose or camera move that the user did not name.
+- THE SUBJECT STAYS WHAT THE USER SAID IT IS. If the user's subject is an OBJECT — a garment, a product, a piece of furniture, a package — it stays that object, alone. Do NOT add a person to wear it, hold it, use it or stand near it. A tank top is a tank top, not a man in a tank top. A shoe is a shoe, not a model wearing shoes. Adding a human that the user never mentioned is one of the worst failures you can make here: the user's reference photo often contains only the object, and inventing a wearer makes the prompt unusable.
+- EDIT INSTRUCTIONS STAY EDIT INSTRUCTIONS: if the user is changing something in an image or video that already exists ("troque a jaqueta por couro", "coloque textura realista no vestido", "adicione rasgos na regata", "remova o fundo"), your output describes ONLY what changes and what must be preserved. Do NOT build a scene around it — no subject description, no setting, no lighting, no camera, no action, and above all no new people. The scene already exists; you are writing an instruction, not a scene.`
+
+    // A regra de idioma fica por último de propósito: é curta, é sobre forma e não
+    // sobre conteúdo, então não compete com o escopo acima.
+    const systemPrompt = [
+      config.systemPrompt,
+      scopeOverride,
+      strictEN
+        ? `ABSOLUTE LANGUAGE RULE: your entire answer is written in English. Whatever language the incoming prompt is in, every descriptive word you write is English. The only exception is text inside double quotes that a character speaks aloud or that is displayed on screen — that keeps the user's original wording and language.`
+        : '',
+    ].filter(Boolean).join('\n\n')
 
     const runChat = async (system: string, user: string): Promise<string> => {
       if (useLocal) {
@@ -449,36 +442,11 @@ ${closing}\n\n${prompt}`
 
     const finalize = (raw: string): string => cleanPrompt(stripIntro(raw.replace(/\\n/g, '\n')))
 
-    const result = finalize(await runChat(systemPrompt, userMsg))
-
-    // Rede de segurança do 'en-strict': se ainda voltou em português/espanhol,
-    // uma passada extra traduz só as partes descritivas. Não roda quando já veio
-    // em inglês, então o custo normal continua sendo uma chamada só.
-    if (strictEN) {
-      const score = nonEnglishScore(result)
-      if (score > NON_ENGLISH_THRESHOLD) {
-        try {
-          const fixed = finalize(await runChat(
-            `You are a precise translator for AI image/video generation prompts. You never restructure, never add and never remove content — you only change the language of the descriptive parts to English.`,
-            `The text below is a generation prompt that was supposed to be entirely in English, but parts of it came out in another language. Rewrite it in English.
-
-RULES:
-- Keep the EXACT same structure: same line breaks, same blank lines, same section labels, same timecodes ([0-2 seconds]), same order. Do not reorganize, shorten, expand or add anything.
-- Translate every descriptive part into natural English prompt language.
-- Text inside double quotes that a character speaks aloud or that is displayed on screen must stay EXACTLY as it is, in its original language — never translate what is inside those quotes.
-- Return ONLY the rewritten prompt, no introduction, no explanation:
-
-${result}`,
-          ))
-          // Só troca se de fato melhorou — nunca devolve algo pior que o original.
-          if (fixed && nonEnglishScore(fixed) < score) return fixed
-        } catch (err) {
-          console.error('[optimize] retradução para inglês falhou:', err)
-        }
-      }
-    }
-
-    return result
+    // SEMPRE uma chamada só. O 'en-strict' resolve o idioma no próprio prompt
+    // (regra no topo do system, no topo da mensagem e colada no texto do usuário),
+    // e não numa segunda passada de tradução — que dobrava o tempo de resposta
+    // justamente para quem escreve em português.
+    return finalize(await runChat(systemPrompt, userMsg))
   })
 
   // ── Prompt de animação (first/last frame) ─────────────────────────────

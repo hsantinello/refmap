@@ -3535,9 +3535,17 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   if (initError) {
     return (
       <div className="flex-1 min-h-0 relative bg-black rounded-[16px] overflow-hidden flex items-center justify-center">
-        <div className="text-red-400/70 text-sm text-center px-8">
-          <div className="font-medium mb-1">Erro ao inicializar WebGL</div>
-          <div className="text-white/30 text-xs font-mono">{initError}</div>
+        <div className="text-sm text-center px-8 max-w-md">
+          <div className="text-red-400/90 font-medium mb-1">Não foi possível iniciar o canvas</div>
+          <div className="text-white/55 text-xs leading-relaxed">
+            O app não conseguiu usar a placa de vídeo para desenhar o canvas.
+          </div>
+          <div className="text-white/40 text-xs leading-relaxed mt-2">
+            Atualize o driver da placa de vídeo e reinicie o app. Se você usa acesso remoto
+            ou uma máquina virtual, a aceleração gráfica pode estar desativada.
+          </div>
+          {/* Detalhe técnico fica discreto, para suporte — não é o que o usuário lê primeiro. */}
+          <div className="text-white/20 text-[10px] font-mono mt-3 break-all">{initError}</div>
         </div>
       </div>
     )
