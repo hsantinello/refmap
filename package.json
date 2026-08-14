@@ -56,6 +56,13 @@
             "x64",
             "arm64"
           ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "icon": "build/icon.png",
@@ -66,7 +73,7 @@
       "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "dmg": {
-      "title": "Ref Map",
+      "title": "Ref Map ${arch}",
       "window": {
         "width": 540,
         "height": 380
