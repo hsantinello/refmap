@@ -6,14 +6,22 @@ on:
       version:
         description: 'Versão (ex: 0.0.15)'
         required: false
+      platform:
+        description: 'Quais plataformas buildar'
+        required: false
+        default: all
+        type: choice
+        options: [all, windows, mac]
 
 permissions:
   contents: write
 
 jobs:
   build-mac:
-    name: Build macOS (universal)
+    name: Build macOS (x64 + arm64)
     runs-on: macos-latest
+    # Permite reprocessar só o Mac sem republicar um Windows que já está no ar.
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'mac' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,7 +38,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # --publish always é obrigatório: sem ele o electron-builder só builda e
         # o latest-mac.yml nunca sobe, deixando o auto-update cego.
-        run: npx electron-vite build && npx electron-builder --mac --universal --publish always
+        # NÃO usar --universal: o @electron/universal junta os arquivos que diferem
+        # entre x64 e arm64 num único padrão de minimatch, e com sharp +
+        # better-sqlite3 + ffmpeg-static isso passa do limite de 64 KB
+        # ("pattern is too long"), quebrando o build do Mac desde a v0.0.18.
+        # Dois DMGs separados evitam esse passo por completo.
+        run: npx electron-vite build && npx electron-builder --mac --publish always
 
       - name: Publicar no Releases
         uses: softprops/action-gh-release@v2
@@ -51,6 +64,7 @@ jobs:
   build-win:
     name: Build Windows (x64)
     runs-on: windows-latest
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
     steps:
       - uses: actions/checkout@v4
 
