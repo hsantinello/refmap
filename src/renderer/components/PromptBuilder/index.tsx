@@ -649,7 +649,7 @@ const MODEL_GROUPS = [
       { id: 'hailuo',      label: 'Hailuo Minimax' },
       { id: 'hunyuan',     label: 'HunYuan Video',     nsfw: true },
       { id: 'kling-3',     label: 'Kling 3.0' },
-      { id: 'ltx-2',       label: 'LTX 2.3',           nsfw: true },
+      { id: 'ltx-2',       label: 'LTX 2.5',           nsfw: true },
       { id: 'luma',        label: 'Luma Dream Machine' },
       { id: 'minimax-h3',  label: 'MiniMax H3',        nsfw: true },
       { id: 'pika',        label: 'Pika' },
@@ -659,6 +659,7 @@ const MODEL_GROUPS = [
       { id: 'sora-2',      label: 'Sora 2' },
       { id: 'veo3',        label: 'Veo 3' },
       { id: 'wan',         label: 'Wan 2.2',            nsfw: true },
+      { id: 'wan-3',       label: 'Wan 3.0' },
     ],
   },
 ]

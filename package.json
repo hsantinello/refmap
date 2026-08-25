@@ -1,6 +1,6 @@
 {
   "name": "refmap",
-  "version": "0.0.26",
+  "version": "0.0.27",
   "description": "Canvas flutuante de referÃªncias para criadores de IA",
   "main": "out/main/index.js",
   "author": "Ref Map",
