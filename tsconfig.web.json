@@ -9,7 +9,8 @@
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "baseUrl": ".",
     "paths": { "@renderer/*": ["src/renderer/*"] },
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "resolveJsonModule": true
   },
   "include": ["src/renderer/**/*"]
 }

@@ -62,11 +62,12 @@ export const LOCAL_AI_UNAVAILABLE = 'LOCAL_AI_UNAVAILABLE'
 // LOCAL_AI_UNAVAILABLE (UI orienta a instalar/abrir o Ollama ou configurar API).
 export async function localChat(
   messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  signal?: AbortSignal,
 ): Promise<string> {
   const { baseURL, model, apiKey } = getLocalTextConfig()
   const client = new OpenAI({ apiKey, baseURL, timeout: 120_000, maxRetries: 0 })
   try {
-    const completion = await client.chat.completions.create({ model, messages })
+    const completion = await client.chat.completions.create({ model, messages }, signal ? { signal } : undefined)
     return completion.choices[0]?.message?.content?.trim() ?? ''
   } catch (err) {
     if (isLocalUnavailable(err)) throw new Error(LOCAL_AI_UNAVAILABLE)

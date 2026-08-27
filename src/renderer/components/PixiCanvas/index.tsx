@@ -125,6 +125,28 @@ function isNsfwNode(node: PixiNode): boolean {
 
 // ─── constants ────────────────────────────────────────────────────────────────
 
+// ─ undo/redo ────────────────────────────────────────────────────────────────
+// Vive no módulo, não dentro do componente: o painel de metadados é um
+// subcomponente e precisa registrar as ações dele (favoritar) na MESMA pilha
+// que o Ctrl+Z do canvas consome. Como ref de componente isso era inalcançável.
+type HistoryEntry = { undo: () => void; redo: () => void }
+const historyRef    = { current: [] as HistoryEntry[] }
+const historyIdxRef = { current: -1 }
+
+function pushHistory(entry: HistoryEntry): void {
+  // Descarta o "futuro" desfeito antes de empilhar a ação nova.
+  historyRef.current = historyRef.current.slice(0, historyIdxRef.current + 1)
+  historyRef.current.push(entry)
+  historyIdxRef.current = historyRef.current.length - 1
+}
+
+// Trocar de canvas invalida a pilha: as ações guardadas apontam para nós que
+// não estão mais na tela, e desfazê-las recriaria conteúdo no canvas errado.
+function resetHistory(): void {
+  historyRef.current = []
+  historyIdxRef.current = -1
+}
+
 const TARGET_H = 340, MAX_W = 420, MIN_W = 200
 const NODE_R   = 14
 const BG_COL   = 0x111111
@@ -418,9 +440,15 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
 
   const handleStar = () => {
     const next = !data.starred
-    updateNodeData(nodeId, { starred: next })
-    window.api.setNodeStarred(nodeId, next).catch(console.error)
-    window.dispatchEvent(new CustomEvent('starred-changed', { detail: { nodeId, starred: next } }))
+    const aplicar = (v: boolean) => {
+      updateNodeData(nodeId, { starred: v })
+      window.api.setNodeStarred(nodeId, v).catch(console.error)
+      // O canvas mantém o nodesRef em sincronia por este evento; sem ele o
+      // desfazer mudaria a store e a estrela do Pixi ficaria para trás.
+      window.dispatchEvent(new CustomEvent('starred-changed', { detail: { nodeId, starred: v } }))
+    }
+    aplicar(next)
+    pushHistory({ undo: () => aplicar(!next), redo: () => aplicar(next) })
   }
 
   // Separa tags de IA (source 'ai') das de metadado, para a seção "✨ Analisado por IA".
@@ -876,17 +904,6 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     img.src = `file://${imagePath}`
   }, [])
 
-  // ─ undo/redo history ──────────────────────────────────────────────────────
-  type HistoryEntry = { undo: () => void; redo: () => void }
-  const historyRef    = useRef<HistoryEntry[]>([])
-  const historyIdxRef = useRef(-1)
-
-  const pushHistory = useCallback((entry: HistoryEntry) => {
-    // Discard any undone future entries before pushing new one
-    historyRef.current = historyRef.current.slice(0, historyIdxRef.current + 1)
-    historyRef.current.push(entry)
-    historyIdxRef.current = historyRef.current.length - 1
-  }, [])
 
   // clipboard for copy/paste
   const clipboardRef = useRef<Array<{ imagePath: string; width: number; relX: number; relY: number; data: ImageNodeData }>>([])
@@ -961,6 +978,12 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   const analysisDoneRef  = useRef(0)
   const aiQueueRef       = useRef<Array<() => Promise<void>>>([])
   const aiRunningRef     = useRef(0)
+  // Ids das análises em voo, para abortar as requisições HTTP ao cancelar o lote.
+  const aiInflightRef    = useRef<Set<string>>(new Set())
+  // Geração do lote. Cancelar incrementa; as análises da geração anterior que
+  // ainda chegarem não podem mexer no contador de um lote novo — senão a barra
+  // do próximo import já nasceria adiantada ou sumiria antes da hora.
+  const analysisGenRef   = useRef(0)
   const MAX_AI_CONCURRENT = 3
   const [initError, setInitError]   = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId?: string; isCanvas?: boolean } | null>(null)
@@ -1309,6 +1332,21 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     run()
   }, [])
 
+  // Cancela o lote inteiro de análise: esvazia a fila do que ainda não começou
+  // e aborta as requisições já em voo. Importar 40 imagens e perceber no meio
+  // que era o idioma errado deixa de custar a espera inteira.
+  const cancelarAnalise = useCallback(() => {
+    analysisGenRef.current++
+    aiQueueRef.current = []
+    for (const id of aiInflightRef.current) void window.api.cancelAI(id).catch(() => {})
+    aiInflightRef.current.clear()
+    // Zera a contagem: as que foram abortadas ainda vão passar pelo finally do
+    // processImage e incrementar 'done', mas com o total em 0 a barra já sai.
+    analysisTotalRef.current = 0
+    analysisDoneRef.current = 0
+    setAnalysisProgress(null)
+  }, [])
+
   // ─ processImage ───────────────────────────────────────────────────────────
 
   // Se o nó está recortado, gera um PNG só da região visível (num temp) para a IA
@@ -1344,12 +1382,21 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   const timedAnalyze = useCallback(async (path: string, lang: 'en' | 'pt', force?: boolean) => {
     getEstimateSeconds('analyze').then(setAnalyzeEstSec).catch(() => {})
     const t0 = Date.now()
-    const r = await window.api.analyzeWithAI(path, lang, force)
-    recordDuration('analyze', Date.now() - t0)
-    return r
+    // Registrada na lista de em-voo para que o botão de cancelar consiga
+    // abortar esta requisição, e não apenas ignorar a resposta.
+    const reqId = `an-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    aiInflightRef.current.add(reqId)
+    try {
+      const r = await window.api.analyzeWithAI(path, lang, force, reqId)
+      recordDuration('analyze', Date.now() - t0)
+      return r
+    } finally {
+      aiInflightRef.current.delete(reqId)
+    }
   }, [])
 
   const processImage = useCallback(async (imagePath: string, nodeId: string) => {
+    const gen = analysisGenRef.current
     analysisTotalRef.current++
     setAnalysisProgress({ done: analysisDoneRef.current, total: analysisTotalRef.current })
     try {
@@ -1438,6 +1485,9 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       console.error('[PixiCanvas] processImage:', err)
       updatePixiNodeData(nodeId, { isPending: false, isError: true })
     } finally {
+      // Sobra de um lote cancelado: não conta em nada. Sem esta guarda ela
+      // avançaria o progresso do lote atual, que não é dela.
+      if (gen !== analysisGenRef.current) return
       analysisDoneRef.current++
       const done = analysisDoneRef.current, total = analysisTotalRef.current
       setAnalysisProgress(done >= total ? null : { done, total })
@@ -2006,8 +2056,34 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       { id: groupId, canvasId, x: minX, y: minY, width: groupW, height: groupH, label },
       selectedIds
     )
+
+    // Agrupar era irreversível: não existe "desagrupar" na interface, então o
+    // único jeito de voltar atrás era apagar o grupo — que leva as imagens junto.
+    // Desfazer aqui remove só o grupo e devolve os filhos ao nível de cima.
+    const desfazerGrupo = () => {
+      removePixiNode(groupId)
+      removeNode(groupId)
+      window.api.deleteNode(groupId).catch(console.error)
+      // Sem isto os filhos ficariam com parent_id apontando para um grupo que
+      // não existe mais, e o próximo carregamento do canvas os perderia.
+      for (const id of selectedIds) window.api.updateNodeParent(id, null).catch(console.error)
+    }
+    const refazerGrupo = () => {
+      useCanvasStore.getState().addGroupNode(groupId, { x: minX, y: minY }, { width: groupW, height: groupH }, canvasId)
+      if (label) {
+        useCanvasStore.getState().setNodes(useCanvasStore.getState().nodes.map(n => n.id === groupId ? { ...n, data: { ...n.data, label } } : n))
+      }
+      const d = useCanvasStore.getState().nodes.find(n => n.id === groupId)?.data
+      if (d) addPixiNode(groupId, 'groupNode', minX, minY, groupW, d, 0, groupH)
+      window.api.createGroupNode(
+        { id: groupId, canvasId, x: minX, y: minY, width: groupW, height: groupH, label },
+        selectedIds
+      ).catch(console.error)
+    }
+    pushHistory({ undo: desfazerGrupo, redo: refazerGrupo })
+
     return groupId
-  }, [canvasId, addPixiNode])
+  }, [canvasId, addPixiNode, removePixiNode, removeNode])
 
   // ─ load canvas nodes ──────────────────────────────────────────────────────
 
@@ -2388,6 +2464,9 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   useEffect(() => {
     if (prevCanvasRef.current === canvasId) return
     prevCanvasRef.current = canvasId
+    // As ações guardadas apontam para nós do canvas anterior: desfazê-las aqui
+    // recriaria conteúdo no lugar errado.
+    resetHistory()
     const world = worldRef.current
     if (!world) return
 
@@ -3825,13 +3904,26 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
               style={{ width: `${(analysisProgress.done / analysisProgress.total) * 100}%` }}
             />
           </div>
-          <div className="absolute top-1 left-1/2 -translate-x-1/2 text-[10px] text-orange-400/70">
-            Analisando {analysisProgress.done}/{analysisProgress.total}
-            {analyzeEstSec
-              ? (analyzeEstSec * analysisProgress.total - analyzeElapsed > 0
-                  ? ` · restam ~${analyzeEstSec * analysisProgress.total - analyzeElapsed}s`
-                  : ' · finalizando…')
-              : ''}
+          <div className="absolute top-1 left-1/2 -translate-x-1/2 flex items-center gap-1.5 text-[10px] text-orange-400/70">
+            <span>
+              Analisando {analysisProgress.done}/{analysisProgress.total}
+              {analyzeEstSec
+                ? (analyzeEstSec * analysisProgress.total - analyzeElapsed > 0
+                    ? ` · restam ~${analyzeEstSec * analysisProgress.total - analyzeElapsed}s`
+                    : ' · finalizando…')
+                : ''}
+            </span>
+            {/* A barra é pointer-events-none para não roubar cliques do canvas;
+                o botão precisa reativar isso em si mesmo. */}
+            <button
+              onClick={cancelarAnalise}
+              title="Cancelar a análise"
+              className="pointer-events-auto w-4 h-4 flex items-center justify-center rounded text-orange-400/50 hover:text-orange-300 hover:bg-orange-400/15 transition-colors"
+            >
+              <svg width="7" height="7" viewBox="0 0 10 10" fill="none">
+                <path d="M0.5 0.5L9.5 9.5M9.5 0.5L0.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </button>
           </div>
         </div>
       )}

@@ -1,43 +1,40 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 
+// Acompanhamento da atualização em andamento.
+//
+// Papéis divididos com o sininho da barra de título: ele ANUNCIA que existe
+// versão nova (bolinha vermelha), mostra as novidades e começa o download. Este
+// banner só ACOMPANHA o que já foi iniciado, para o progresso e o "reiniciar
+// para instalar" ficarem visíveis sem manter o painel do sininho aberto.
+//
+// Por isso ele NÃO trata mais 'available' nem 'error': a mesma novidade em dois
+// lugares, com dois botões "Baixar", era ruído — e falha ao consultar
+// atualização não merece interromper ninguém (ela aparece dentro do sininho).
+
 type UpdateState =
   | { status: 'idle' }
-  | { status: 'available'; version: string }
   | { status: 'downloading'; percent: number }
   | { status: 'ready'; version: string }
-  | { status: 'error'; message: string }
 
 export default function UpdateBanner() {
   const [update, setUpdate] = useState<UpdateState>({ status: 'idle' })
   const [dismissed, setDismissed] = useState(false)
 
   useEffect(() => {
-    const offAvailable = window.api.onUpdateAvailable(({ version }) => {
-      setUpdate({ status: 'available', version })
-      setDismissed(false)
-    })
-
     const offProgress = window.api.onDownloadProgress((percent) => {
       setUpdate({ status: 'downloading', percent })
+      // Um download novo reabre o banner mesmo que o anterior tenha sido fechado.
+      setDismissed(false)
     })
 
     const offDownloaded = window.api.onUpdateDownloaded((version) => {
       setUpdate({ status: 'ready', version })
     })
 
-    const offError = window.api.onUpdateError((msg) => {
-      setUpdate({ status: 'error', message: msg })
-      setDismissed(false)
-    })
-
-    window.api.checkForUpdates().catch(() => {})
-
     return () => {
-      offAvailable()
       offProgress()
       offDownloaded()
-      offError()
     }
   }, [])
 
@@ -60,11 +57,6 @@ export default function UpdateBanner() {
           }}
         >
           <span className="text-white/70">
-            {update.status === 'available' && (
-              <>
-                Atualização disponível <span className="font-semibold" style={{ color: 'rgba(251,146,60,0.95)' }}>v{update.version}</span>
-              </>
-            )}
             {update.status === 'downloading' && (
               <>
                 Baixando atualização…{' '}
@@ -76,31 +68,9 @@ export default function UpdateBanner() {
                 Atualização <span className="font-semibold" style={{ color: 'rgba(251,146,60,0.95)' }}>v{update.version}</span> pronta para instalar
               </>
             )}
-            {update.status === 'error' && (
-              <span style={{ color: 'rgba(251,146,60,0.8)' }}>
-                Erro ao baixar atualização — baixe manualmente em refmap.app
-              </span>
-            )}
           </span>
 
           <div className="flex items-center gap-2">
-            {update.status === 'available' && (
-              <button
-                onClick={() => {
-                  setUpdate({ status: 'downloading', percent: 0 })
-                  window.api.downloadUpdate()
-                }}
-                className="px-2.5 py-0.5 rounded font-medium cursor-pointer"
-                style={{
-                  color: 'rgba(251,146,60,0.95)',
-                  background: 'rgba(251,146,60,0.15)',
-                  border: '1px solid rgba(251,146,60,0.35)',
-                }}
-              >
-                Baixar
-              </button>
-            )}
-
             {update.status === 'downloading' && (
               <div
                 className="w-24 h-1 rounded-full overflow-hidden"
@@ -114,26 +84,25 @@ export default function UpdateBanner() {
             )}
 
             {update.status === 'ready' && (
-              <button
-                onClick={() => window.api.installUpdate()}
-                className="px-2.5 py-0.5 rounded font-medium cursor-pointer"
-                style={{
-                  color: 'rgba(251,146,60,0.95)',
-                  background: 'rgba(251,146,60,0.15)',
-                  border: '1px solid rgba(251,146,60,0.35)',
-                }}
-              >
-                Reiniciar e instalar
-              </button>
-            )}
-
-            {update.status !== 'downloading' && (
-              <button
-                onClick={() => setDismissed(true)}
-                className="text-white/30 hover:text-white/60 transition-colors cursor-pointer leading-none"
-              >
-                ✕
-              </button>
+              <>
+                <button
+                  onClick={() => window.api.installUpdate()}
+                  className="px-2.5 py-0.5 rounded font-medium cursor-pointer"
+                  style={{
+                    color: 'rgba(251,146,60,0.95)',
+                    background: 'rgba(251,146,60,0.15)',
+                    border: '1px solid rgba(251,146,60,0.35)',
+                  }}
+                >
+                  Reiniciar e instalar
+                </button>
+                <button
+                  onClick={() => setDismissed(true)}
+                  className="text-white/30 hover:text-white/60 transition-colors cursor-pointer leading-none"
+                >
+                  ✕
+                </button>
+              </>
             )}
           </div>
         </motion.div>

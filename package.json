@@ -1,7 +1,7 @@
 {
   "name": "refmap",
-  "version": "0.0.27",
-  "description": "Canvas flutuante de referÃªncias para criadores de IA",
+  "version": "0.0.28",
+  "description": "Canvas flutuante de referências para criadores de IA",
   "main": "out/main/index.js",
   "author": "Ref Map",
   "repository": "https://github.com/hsantinello/refmap",
@@ -17,6 +17,9 @@
     "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
   "build": {
+    "extraMetadata": {
+      "description": "Ref Map"
+    },
     "appId": "com.refmap.app",
     "productName": "Ref Map",
     "copyright": "Copyright © 2026",

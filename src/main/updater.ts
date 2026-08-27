@@ -9,6 +9,43 @@ function send(channel: string, payload?: unknown) {
   win?.webContents.send(channel, payload)
 }
 
+// As notas do GitHub chegam como HTML (o feed atom devolve o corpo já
+// renderizado). Em vez de injetar isso na interface — HTML remoto dentro do
+// app —, reduzimos a linhas de texto e a UI desenha a lista com o estilo dela.
+function notasParaLinhas(html: string): string[] {
+  return html
+    // cada item de lista e cada quebra viram uma linha antes de tirar as tags
+    .replace(/<\/(li|p|h[1-6]|div)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .split('\n')
+    // tira marcador manual ("- ", "* ") para não duplicar o bullet do CSS
+    .map(l => l.trim().replace(/^[-*\u2022]\s*/, '').trim())
+    .filter(Boolean)
+}
+
+// Normaliza os dois formatos que o electron-updater usa: string única (uma
+// release) ou lista por versão (fullChangelog).
+function normalizarNotas(
+  notas: string | Array<{ version: string; note: string | null }> | null | undefined,
+  versaoFallback: string,
+): Array<{ version: string; items: string[] }> {
+  if (!notas) return []
+  if (typeof notas === 'string') {
+    const items = notasParaLinhas(notas)
+    return items.length ? [{ version: versaoFallback, items }] : []
+  }
+  return notas
+    .map(n => ({ version: n.version, items: notasParaLinhas(n.note ?? '') }))
+    .filter(n => n.items.length > 0)
+}
+
 export function initUpdater(mainWindow: BrowserWindow): void {
   win = mainWindow
 
@@ -32,9 +69,18 @@ export function initUpdater(mainWindow: BrowserWindow): void {
 
   autoUpdater.autoDownload = false         // user clicks "Download"
   autoUpdater.autoInstallOnAppQuit = false // ao fechar, PERGUNTAMOS (ver 'close' abaixo)
+  // Traz as notas de TODAS as versões entre a instalada e a mais nova, não só
+  // da última: quem ficou três versões para trás vê tudo o que perdeu.
+  autoUpdater.fullChangelog = true
 
   autoUpdater.on('update-available', (info) => {
-    send('updater:updateAvailable', { version: info.version })
+    send('updater:updateAvailable', {
+      version: info.version,
+      releaseDate: info.releaseDate,
+      // Pode vir vazio: uma release publicada sem descrição não tem nota
+      // nenhuma. A UI cai no changelog embarcado nesse caso.
+      notes: normalizarNotas(info.releaseNotes, info.version),
+    })
   })
 
   autoUpdater.on('download-progress', (progress) => {

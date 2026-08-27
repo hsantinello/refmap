@@ -12,9 +12,14 @@ import { analyzeWithOpenAI } from '../ai/openai'
 import { MODEL_PROMPT_CONFIGS, IMAGE_MODEL_IDS } from '../ai/model-prompts'
 import { getLocalConfig, getLocalTextConfig, localChat, isLocalUnavailable, LOCAL_AI_UNAVAILABLE } from '../ai/local'
 import { installLocalAI, uninstallLocal } from '../ai/localInstall'
+import { abrirOperacao, fecharOperacao, cancelarOperacao, foiCancelado, ABORTED } from '../ai/cancel'
 import { extractScenes, extractFrameAt } from '../video/extractScenes'
 
 export function registerHandlers(win: BrowserWindow): void {
+  // ── Cancelamento de IA ─────────────────────────────────────
+  // Aborta a requisição HTTP em andamento. false = já tinha terminado.
+  ipcMain.handle('ai:cancel', (_e, requestId: string) => cancelarOperacao(requestId))
+
   // ── Window controls ────────────────────────────────────────────────────
   ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url))
   ipcMain.handle('window:minimize', () => win.minimize())
@@ -140,142 +145,161 @@ export function registerHandlers(win: BrowserWindow): void {
   })
 
   // ── AI analysis ───────────────────────────────────────────────────────
-  ipcMain.handle('image:analyzeWithAI', async (_e, imagePath: string, lang: 'en' | 'pt' = 'en', force = false) => {
+  ipcMain.handle('image:analyzeWithAI', async (_e, imagePath: string, lang: 'en' | 'pt' = 'en', force = false, requestId?: string) => {
     // Cache por idioma: análise em PT e em EN são entradas separadas.
     const cacheKey = lang === 'pt' ? `${imagePath}::pt` : imagePath
     // force = true (botão "Reanalisar com IA") pula a leitura do cache e refaz de verdade.
     const cached = force ? null : aiCacheQueries.get(cacheKey)
     if (cached && typeof cached === 'string' && /\{[^}]+\}/.test(cached)) return cached
 
-    const provider = settingQueries.get('aiProvider') || 'anthropic'
+    // A partir daqui vai haver chamada de rede: torna a análise cancelável.
+    // Cache hit sai antes disso e nem chega a registrar.
+    const signal = abrirOperacao(requestId)
+    try {
 
-    const encryptedAnthropic = settingQueries.get('apiKey_anthropic')
-    const encryptedOpenAI = settingQueries.get('apiKey_openai')
+      const provider = settingQueries.get('aiProvider') || 'anthropic'
 
-    const decryptKey = (enc: unknown): string => {
-      if (!enc || typeof enc !== 'string') return ''
-      try { return safeStorage.decryptString(Buffer.from(enc, 'hex')).trim() } catch { return '' }
-    }
+      const encryptedAnthropic = settingQueries.get('apiKey_anthropic')
+      const encryptedOpenAI = settingQueries.get('apiKey_openai')
 
-    // Resolve which key to use for vision. Prefer the active provider's key;
-    // only fall back to another provider's key when the active one is missing
-    // or blank. A blank/revoked key must NOT silently route to OpenAI — it
-    // yields a clean "not configured" error instead of a raw 401.
-    // Rastreia o provider da chave EFETIVAMENTE resolvida: se a chave do
-    // provider ativo falta, cai para outra chave — mas o dispatch abaixo tem
-    // que rotear para o SDK dessa chave, senão manda sk- da OpenAI ao endpoint
-    // Anthropic (401).
-    let effectiveProvider = provider
-    let apiKey = decryptKey(settingQueries.get(`apiKey_${provider}`))
-    if (!apiKey) {
-      const aKey = decryptKey(encryptedAnthropic)
-      const oKey = decryptKey(encryptedOpenAI)
-      if (aKey) { apiKey = aKey; effectiveProvider = 'anthropic' }
-      else if (oKey) { apiKey = oKey; effectiveProvider = 'openai' }
-    }
-
-    const isTogetherKey = apiKey.startsWith('tgp_')
-
-    let tags: string
-    if (!apiKey) {
-      // Sem chave de nuvem → IA local (Ollama). Comportamento padrão do app.
-      const local = getLocalConfig()
-      try {
-        tags = await analyzeWithOpenAI(imagePath, local.apiKey, {
-          baseURL: local.baseURL, model: local.model, lang,
-        })
-      } catch (err) {
-        if (isLocalUnavailable(err)) throw new Error(LOCAL_AI_UNAVAILABLE)
-        throw err
+      const decryptKey = (enc: unknown): string => {
+        if (!enc || typeof enc !== 'string') return ''
+        try { return safeStorage.decryptString(Buffer.from(enc, 'hex')).trim() } catch { return '' }
       }
-    } else if (isTogetherKey) {
-      // Try Together AI vision models in order until one works. These are the
-      // multimodal models that are actually SERVERLESS on Together — verified by
-      // sending a real image to /v1/chat/completions. Counterintuitively, the
-      // "*-VL" and Llama-4/3.2-Vision models are dedicated-only (they return a
-      // 400 "non-serverless model" error), while these smaller multimodal chat
-      // models work serverless. gemma-3n gives the richest descriptions.
-      const togetherVisionModels = [
-        'google/gemma-3n-E4B-it',
-        'MiniMaxAI/MiniMax-M3',
-      ]
-      tags = ''
-      let lastErr: unknown = null
-      // Only genuine transient errors are worth retrying. The 400 "Unable to
-      // access non-serverless model" is PERMANENT for the account (the model
-      // isn't available serverless at all), so we must NOT retry it — doing so
-      // just wastes ~30s/image before falling back. Fail it fast to the next
-      // model / to the Anthropic|OpenAI fallback below.
-      const isRetryable = (err: unknown): boolean => {
-        const status = (err as { status?: number })?.status
-        const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase()
-        return status === 429 || status === 500 || status === 502 || status === 503 ||
-          msg.includes('rate limit') || msg.includes('overloaded')
+
+      // Resolve which key to use for vision. Prefer the active provider's key;
+      // only fall back to another provider's key when the active one is missing
+      // or blank. A blank/revoked key must NOT silently route to OpenAI — it
+      // yields a clean "not configured" error instead of a raw 401.
+      // Rastreia o provider da chave EFETIVAMENTE resolvida: se a chave do
+      // provider ativo falta, cai para outra chave — mas o dispatch abaixo tem
+      // que rotear para o SDK dessa chave, senão manda sk- da OpenAI ao endpoint
+      // Anthropic (401).
+      let effectiveProvider = provider
+      let apiKey = decryptKey(settingQueries.get(`apiKey_${provider}`))
+      if (!apiKey) {
+        const aKey = decryptKey(encryptedAnthropic)
+        const oKey = decryptKey(encryptedOpenAI)
+        if (aKey) { apiKey = aKey; effectiveProvider = 'anthropic' }
+        else if (oKey) { apiKey = oKey; effectiveProvider = 'openai' }
       }
-      const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
-      for (const model of togetherVisionModels) {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            tags = await analyzeWithOpenAI(imagePath, apiKey, {
-              baseURL: 'https://api.together.xyz/v1',
-              model,
-              lang,
-            })
-            break
-          } catch (err) {
-            lastErr = err
-            console.warn(`[analyzeWithAI] Together vision "${model}" attempt ${attempt + 1}/3 failed:`, err instanceof Error ? err.message : err)
-            // Non-retryable (e.g. 401) or out of attempts → move to next model
-            if (!isRetryable(err) || attempt === 2) break
-            await delay(1500 * (attempt + 1)) // 1.5s, then 3s backoff
+
+      const isTogetherKey = apiKey.startsWith('tgp_')
+
+      let tags: string
+      if (!apiKey) {
+        // Sem chave de nuvem → IA local (Ollama). Comportamento padrão do app.
+        const local = getLocalConfig()
+        try {
+          tags = await analyzeWithOpenAI(imagePath, local.apiKey, {
+            baseURL: local.baseURL, model: local.model, lang, signal,
+          })
+        } catch (err) {
+          if (isLocalUnavailable(err)) throw new Error(LOCAL_AI_UNAVAILABLE)
+          throw err
+        }
+      } else if (isTogetherKey) {
+        // Try Together AI vision models in order until one works. These are the
+        // multimodal models that are actually SERVERLESS on Together — verified by
+        // sending a real image to /v1/chat/completions. Counterintuitively, the
+        // "*-VL" and Llama-4/3.2-Vision models are dedicated-only (they return a
+        // 400 "non-serverless model" error), while these smaller multimodal chat
+        // models work serverless. gemma-3n gives the richest descriptions.
+        const togetherVisionModels = [
+          'google/gemma-3n-E4B-it',
+          'MiniMaxAI/MiniMax-M3',
+        ]
+        tags = ''
+        let lastErr: unknown = null
+        // Only genuine transient errors are worth retrying. The 400 "Unable to
+        // access non-serverless model" is PERMANENT for the account (the model
+        // isn't available serverless at all), so we must NOT retry it — doing so
+        // just wastes ~30s/image before falling back. Fail it fast to the next
+        // model / to the Anthropic|OpenAI fallback below.
+        const isRetryable = (err: unknown): boolean => {
+          const status = (err as { status?: number })?.status
+          const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase()
+          return status === 429 || status === 500 || status === 502 || status === 503 ||
+            msg.includes('rate limit') || msg.includes('overloaded')
+        }
+        const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
+        for (const model of togetherVisionModels) {
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              tags = await analyzeWithOpenAI(imagePath, apiKey, {
+                baseURL: 'https://api.together.xyz/v1',
+                model,
+                lang,
+                signal,
+              })
+              break
+            } catch (err) {
+              lastErr = err
+              console.warn(`[analyzeWithAI] Together vision "${model}" attempt ${attempt + 1}/3 failed:`, err instanceof Error ? err.message : err)
+              // Non-retryable (e.g. 401) or out of attempts → move to next model
+              if (!isRetryable(err) || attempt === 2) break
+              await delay(1500 * (attempt + 1)) // 1.5s, then 3s backoff
+            }
+          }
+          if (tags) break
+        }
+        // Together vision unavailable — fall back to a REAL Anthropic/OpenAI key
+        // if one is configured. Guard against empty/blank stored keys, which
+        // otherwise crash the SDK with a cryptic "Could not resolve authentication".
+        if (!tags) {
+          const decryptIfPresent = (enc: unknown): string => {
+            if (!enc || typeof enc !== 'string') return ''
+            try { return safeStorage.decryptString(Buffer.from(enc, 'hex')).trim() } catch { return '' }
+          }
+          const anthropicKey = decryptIfPresent(encryptedAnthropic)
+          const openaiKey = decryptIfPresent(encryptedOpenAI)
+          if (anthropicKey) {
+            tags = await analyzeWithAnthropic(imagePath, anthropicKey, lang, signal)
+          } else if (openaiKey) {
+            tags = await analyzeWithOpenAI(imagePath, openaiKey, { lang, signal })
+          } else {
+            // Together vision models all failed and there's no OpenAI/Anthropic
+            // fallback key. Propagate the real error so it's diagnosable.
+            const detail = lastErr instanceof Error ? lastErr.message : String(lastErr ?? 'unknown error')
+            console.warn(`[analyzeWithAI] Together vision failed and no fallback key configured. Last error: ${detail}`)
+            throw new Error(`Together AI vision failed: ${detail}`)
           }
         }
-        if (tags) break
+      } else if (effectiveProvider === 'anthropic') {
+        tags = await analyzeWithAnthropic(imagePath, apiKey, lang, signal)
+      } else {
+        tags = await analyzeWithOpenAI(imagePath, apiKey, { lang, signal })
       }
-      // Together vision unavailable — fall back to a REAL Anthropic/OpenAI key
-      // if one is configured. Guard against empty/blank stored keys, which
-      // otherwise crash the SDK with a cryptic "Could not resolve authentication".
-      if (!tags) {
-        const decryptIfPresent = (enc: unknown): string => {
-          if (!enc || typeof enc !== 'string') return ''
-          try { return safeStorage.decryptString(Buffer.from(enc, 'hex')).trim() } catch { return '' }
-        }
-        const anthropicKey = decryptIfPresent(encryptedAnthropic)
-        const openaiKey = decryptIfPresent(encryptedOpenAI)
-        if (anthropicKey) {
-          tags = await analyzeWithAnthropic(imagePath, anthropicKey, lang)
-        } else if (openaiKey) {
-          tags = await analyzeWithOpenAI(imagePath, openaiKey, { lang })
-        } else {
-          // Together vision models all failed and there's no OpenAI/Anthropic
-          // fallback key. Propagate the real error so it's diagnosable.
-          const detail = lastErr instanceof Error ? lastErr.message : String(lastErr ?? 'unknown error')
-          console.warn(`[analyzeWithAI] Together vision failed and no fallback key configured. Last error: ${detail}`)
-          throw new Error(`Together AI vision failed: ${detail}`)
-        }
-      }
-    } else if (effectiveProvider === 'anthropic') {
-      tags = await analyzeWithAnthropic(imagePath, apiKey, lang)
-    } else {
-      tags = await analyzeWithOpenAI(imagePath, apiKey, { lang })
-    }
 
-    // Só cacheia saída bem-formada; uma resposta truncada/lixo (ex.: stream do
-    // Together que travou contendo qualquer "{x}") não pode ser cacheada e
-    // servida para sempre. O read gate acima permanece permissivo de propósito,
-    // para não re-analisar em loop um truncamento determinístico.
-    const isWellFormedTags = (s: string): boolean =>
-      s.trimStart().startsWith('{') &&
-      /\}/.test(s) &&
-      (s.match(/\[[^\]]+\]/g)?.length ?? 0) >= 5
-    if (isWellFormedTags(tags)) aiCacheQueries.set(cacheKey, tags)
-    return tags
+      // Só cacheia saída bem-formada; uma resposta truncada/lixo (ex.: stream do
+      // Together que travou contendo qualquer "{x}") não pode ser cacheada e
+      // servida para sempre. O read gate acima permanece permissivo de propósito,
+      // para não re-analisar em loop um truncamento determinístico.
+      const isWellFormedTags = (s: string): boolean =>
+        s.trimStart().startsWith('{') &&
+        /\}/.test(s) &&
+        (s.match(/\[[^\]]+\]/g)?.length ?? 0) >= 5
+      if (isWellFormedTags(tags)) aiCacheQueries.set(cacheKey, tags)
+      return tags
+    } catch (err) {
+      // Cancelar é ação do usuário, não falha: vira um erro único que a UI
+      // reconhece e engole em silêncio, sem banner vermelho.
+      if (foiCancelado(signal, err)) throw new Error(ABORTED)
+      throw err
+    } finally {
+      fecharOperacao(requestId)
+    }
   })
 
   // ── Prompt optimization ───────────────────────────────────────────────
-  ipcMain.handle('prompt:optimize', async (_e, prompt: string, modelId: string) => {
+  ipcMain.handle('prompt:optimize', async (_e, prompt: string, modelId: string, format: 'text' | 'json' = 'text', requestId?: string) => {
+    // Registrado antes do preparo: o cancelamento pode chegar a qualquer
+    // momento, inclusive antes de a chamada HTTP sair.
+    const signal = abrirOperacao(requestId)
     const config = MODEL_PROMPT_CONFIGS[modelId]
     if (!config) throw new Error(`Unknown model: ${modelId}`)
+    // JSON só quando o modelo declara a variante; senão cai na prosa.
+    const asJson = format === 'json' && !!config.jsonSystemPrompt
 
     const provider = settingQueries.get('aiProvider') || 'anthropic'
     // Resolve a chave: provider ativo, senão qualquer outra chave de nuvem salva.
@@ -361,6 +385,12 @@ export function registerHandlers(win: BrowserWindow): void {
     // dele escrever, a posição de maior peso na saída.
     const scopeCheck = `FINAL CHECK ON SCOPE: list to yourself the things the user actually named. Your answer may not contain a single subject, person, place, object, action, light source or camera move beyond that list. If the user named only an object, no human appears in your answer. If the user is editing something that already exists, answer with the change only — never with a scene.`
 
+    // Em JSON a instrução de prosa atrapalha: o fecho pede o objeto cru.
+    const closingJson = `Return ONLY the raw JSON object — no markdown fences, no commentary. The answer starts with the opening brace.
+
+${scopeCheck}
+
+The user's prompt follows:`
     const closing = strictEN
       ? `Return ONLY the prompt, no introduction, no explanation.\n\n${scopeCheck}\n\nFINAL CHECK ON LANGUAGE: every descriptive word of your answer must be in English — subject, action, camera, lighting, mood, audio and SFX included. Only text inside double quotes that is spoken aloud or shown on screen may stay in another language. The user's prompt follows:`
       : `Return ONLY the prompt, no introduction, no explanation.\n\n${scopeCheck}\n\nThe user's prompt follows:`
@@ -377,7 +407,7 @@ CORE OBJECTIVE — REFORMAT, DO NOT INVENT (as important as the VERBATIM rule ab
 - When unsure whether a detail is implied, LEAVE IT OUT and keep the user's own ${strictEN ? 'meaning, translated to English' : 'wording'}.
 The result must be a faithful, well-formatted version of THE USER'S prompt: same scene, better structure — never a richer, more elaborate or different creative concept.${realismDefault}
 
-${closing}\n\n${prompt}`
+${asJson ? closingJson : closing}\n\n${prompt}`
 
     // O systemPrompt de cada modelo é um guia de "como escrever um prompt rico",
     // com SEÇÕES OBRIGATÓRIAS (cena, luz, câmera, áudio…). Quando o usuário não dá
@@ -392,7 +422,7 @@ AUTHORITY: the user's text is the sole authority over CONTENT — what exists, w
 
 The sections, element lists, formulas and examples above describe the FULL vocabulary this model understands. They are a MENU to choose from, never a checklist to complete.
 - Fill ONLY the parts the user actually gave material for. If the user said nothing about camera, framing, lens, lighting, location, time of day, weather, mood, audio or style, those parts DO NOT appear in your output. Omitting a section is CORRECT; inventing content to fill it is a FAILURE.
-- Any minimum length, sentence count or "cover all N elements" instruction above is void when the user's prompt does not contain that much. A short request stays short — a single sentence is a valid answer. EXCEPTION — an explicit FORMATTING requirement (for example: "every prompt carries timecodes") is form, not content: keep it, and satisfy it by distributing the user's own material across that format, never by inventing beats to fill it.
+- Any minimum length, sentence count or "cover all N elements" instruction above is void when the user's prompt does not contain that much. A short request stays short — a single sentence is a valid answer. TWO EXCEPTIONS, both about FORM rather than content: (a) an explicit formatting requirement, such as "every prompt carries timecodes", is kept — satisfy it by distributing the user's own material across that format, never by inventing beats to fill it; (b) a parameter the guide above marks as REQUIRED photographic craft — camera, lens, aperture, lighting setup, composition, colour grade, negative list — is kept and filled with deliberate choices that serve the look the user asked for. Craft decides HOW the thing the user named is rendered; it must never introduce a subject, person, place, object or action they did not name, and it never applies when the user is editing an image that already exists.
 - Never introduce a person, place, object, action, pose or camera move that the user did not name.
 - THE SUBJECT STAYS WHAT THE USER SAID IT IS. If the user's subject is an OBJECT — a garment, a product, a piece of furniture, a package — it stays that object, alone. Do NOT add a person to wear it, hold it, use it or stand near it. A tank top is a tank top, not a man in a tank top. A shoe is a shoe, not a model wearing shoes. Adding a human that the user never mentioned is one of the worst failures you can make here: the user's reference photo often contains only the object, and inventing a wearer makes the prompt unusable.
 - EDIT INSTRUCTIONS STAY EDIT INSTRUCTIONS: if the user is changing something in an image or video that already exists ("troque a jaqueta por couro", "coloque textura realista no vestido", "adicione rasgos na regata", "remova o fundo"), your output describes ONLY what changes and what must be preserved. Do NOT build a scene around it — no subject description, no setting, no lighting, no camera, no action, and above all no new people. The scene already exists; you are writing an instruction, not a scene.`
@@ -400,7 +430,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
     // A regra de idioma fica por último de propósito: é curta, é sobre forma e não
     // sobre conteúdo, então não compete com o escopo acima.
     const systemPrompt = [
-      config.systemPrompt,
+      asJson ? config.jsonSystemPrompt! : config.systemPrompt,
       scopeOverride,
       strictEN
         ? `ABSOLUTE LANGUAGE RULE: your entire answer is written in English. Whatever language the incoming prompt is in, every descriptive word you write is English. The only exception is text inside double quotes that a character speaks aloud or that is displayed on screen — that keeps the user's original wording and language.`
@@ -413,7 +443,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
         return await localChat([
           { role: 'system', content: system },
           { role: 'user', content: user },
-        ])
+        ], signal)
       } else if (effectiveProvider === 'anthropic') {
         const client = new Anthropic({ apiKey })
         const message = await client.messages.create({
@@ -421,7 +451,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
           max_tokens: 2048,
           system,
           messages: [{ role: 'user', content: user }],
-        })
+        }, signal ? { signal } : undefined)
         const block = message.content[0]
         return block?.type === 'text' ? block.text.trim() : ''
       } else {
@@ -435,24 +465,53 @@ The sections, element lists, formulas and examples above describe the FULL vocab
             { role: 'system', content: system },
             { role: 'user', content: user },
           ],
-        })
+        }, signal ? { signal } : undefined)
         return completion.choices[0].message.content?.trim() ?? ''
       }
     }
 
-    const finalize = (raw: string): string => cleanPrompt(stripIntro(raw.replace(/\\n/g, '\n')))
+    // O caminho de prosa remove markdown e cabeçalhos. Para JSON isso seria
+    // destrutivo — cleanPrompt tira #, *, _, crases e marcadores de lista, e
+    // stripIntro pode comer a primeira linha. Então o JSON só perde as cercas
+    // de código e é validado.
+    const finalizeJson = (raw: string): string => {
+      const semCerca = raw.replace(/^\s*```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+      const ini = semCerca.indexOf('{')
+      const fim = semCerca.lastIndexOf('}')
+      const recorte = ini >= 0 && fim > ini ? semCerca.slice(ini, fim + 1) : semCerca
+      try {
+        // Reserializa: garante JSON válido e indentação consistente na UI.
+        return JSON.stringify(JSON.parse(recorte), null, 2)
+      } catch {
+        // JSON malformado — devolve o recorte cru. Melhor entregar algo
+        // aproveitável do que estourar um erro na cara do usuário.
+        return recorte
+      }
+    }
+    const finalize = (raw: string): string =>
+      asJson ? finalizeJson(raw) : cleanPrompt(stripIntro(raw.replace(/\\n/g, '\n')))
 
     // SEMPRE uma chamada só. O 'en-strict' resolve o idioma no próprio prompt
     // (regra no topo do system, no topo da mensagem e colada no texto do usuário),
     // e não numa segunda passada de tradução — que dobrava o tempo de resposta
     // justamente para quem escreve em português.
-    return finalize(await runChat(systemPrompt, userMsg))
+    try {
+      return finalize(await runChat(systemPrompt, userMsg))
+    } catch (err) {
+      // Cancelar é uma ação do usuário, não uma falha: vira um erro único
+      // que a UI reconhece e engole em silêncio.
+      if (foiCancelado(signal, err)) throw new Error(ABORTED)
+      throw err
+    } finally {
+      fecharOperacao(requestId)
+    }
   })
 
   // ── Prompt de animação (first/last frame) ─────────────────────────────
   // Recebe DUAS imagens (primeiro e último quadro) e gera um prompt de MOVIMENTO
   // descrevendo a transição — para workflows image-to-video de first/last frame.
-  ipcMain.handle('prompt:animate', async (_e, firstPath: string, lastPath: string): Promise<string> => {
+  ipcMain.handle('prompt:animate', async (_e, firstPath: string, lastPath: string, requestId?: string): Promise<string> => {
+    const signal = abrirOperacao(requestId)
     const provider = settingQueries.get('aiProvider') || 'anthropic'
     const decryptKey = (enc: unknown): string => {
       if (!enc || typeof enc !== 'string') return ''
@@ -487,7 +546,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
         const msg = await client.messages.create({
           model: 'claude-haiku-4-5-20251001', max_tokens: 1024,
           messages: [{ role: 'user', content: [block(firstPath), block(lastPath), { type: 'text', text: instruction }] }],
-        })
+        }, signal ? { signal } : undefined)
         const b = msg.content[0]
         return b?.type === 'text' ? b.text.trim() : ''
       }
@@ -506,11 +565,14 @@ The sections, element lists, formulas and examples above describe the FULL vocab
           { type: 'image_url', image_url: { url: url(lastPath) } },
           { type: 'text', text: instruction },
         ] }],
-      })
+      }, signal ? { signal } : undefined)
       return completion.choices[0]?.message?.content?.trim() ?? ''
     } catch (err) {
+      if (foiCancelado(signal, err)) throw new Error(ABORTED)
       if (useLocal && isLocalUnavailable(err)) throw new Error(LOCAL_AI_UNAVAILABLE)
       throw err
+    } finally {
+      fecharOperacao(requestId)
     }
   })
 

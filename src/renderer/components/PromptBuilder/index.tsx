@@ -1,7 +1,7 @@
 import { Fragment, useState, useRef, useEffect, forwardRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { createPortal } from 'react-dom'
-import { friendlyError } from '../../lib/friendlyError'
+import { friendlyError, foiCancelado, type Recovery } from '../../lib/friendlyError'
 import {
   DndContext,
   rectIntersection,
@@ -636,7 +636,7 @@ const MODEL_GROUPS = [
       { id: 'hidream',            label: 'HiDream',         nsfw: true },
       { id: 'krea-2',             label: 'Krea 2' },
       { id: 'midjourney',         label: 'Midjourney' },
-      { id: 'nano-banana',        label: 'Nano Banana' },
+      { id: 'nano-banana',        label: 'Nano Banana', json: true },
       { id: 'qwen-image-2512',    label: 'Qwen Image 2512', nsfw: true },
       { id: 'stable-diffusion',   label: 'Stable Diffusion', nsfw: true },
       { id: 'zimage',             label: 'ZImage',          nsfw: true },
@@ -657,7 +657,7 @@ const MODEL_GROUPS = [
       { id: 'runway-gen4', label: 'Runway Gen-4' },
       { id: 'seedance',    label: 'Seedance 2.5' },
       { id: 'sora-2',      label: 'Sora 2' },
-      { id: 'veo3',        label: 'Veo 3' },
+      { id: 'veo3',        label: 'Veo 3', json: true },
       { id: 'wan',         label: 'Wan 2.2',            nsfw: true },
       { id: 'wan-3',       label: 'Wan 3.0' },
     ],
@@ -673,6 +673,7 @@ type HistoryEntry = { text: string; model?: string; source?: string }
 export default function PromptBuilder() {
   const {
     promptTags, reorderTags, clearAll, getPromptString, insertTagAt, removeTag, updateTagText,
+    setPromptTags,
   } = usePromptStore()
   const dragPointerRef = useRef({ x: 0, y: 0 })
   const dragCleanupRef = useRef<(() => void) | null>(null)
@@ -729,6 +730,24 @@ export default function PromptBuilder() {
   // O botão trunca em 200px, então ele mostra só o "o que houve" e a solução
   // vai no tooltip — junto do texto técnico, para suporte.
   const [optimizeErrorHelp, setOptimizeErrorHelp] = useState<string | null>(null)
+  // Que botão de recuperação acompanha o erro. O texto explica o que fazer;
+  // isto deixa o usuário FAZER dali mesmo, sem refazer o caminho na mão.
+  const [optRecovery, setOptRecovery] = useState<Recovery>('none')
+  // Argumentos da última otimização, para o "Tentar de novo" repetir exatamente
+  // a mesma chamada — inclusive o texto de origem, que já foi limpo do campo.
+  const ultimaOtimizacaoRef = useRef<{ modelId: string; format: 'text' | 'json'; source: string } | null>(null)
+  // Id da otimização em voo. Serve para abortar a requisição HTTP de verdade
+  // no processo principal, não só ignorar a resposta quando ela chegar.
+  const optReqRef = useRef<string | null>(null)
+  // Alterna entre a versão em prosa e a versão JSON do mesmo prompt.
+  //   source  — o prompt ORIGINAL, para reconverter a partir dele em vez de
+  //             reotimizar um texto já otimizado (empilharia duas passadas).
+  //   text/json — cada versão fica em cache, então voltar é instantâneo e não
+  //             gasta outra chamada de API.
+  //   showing — qual delas está no campo agora; define o rótulo do botão.
+  const [dualPrompt, setDualPrompt] = useState<
+    { modelId: string; source: string; text?: string; json?: string; showing: 'text' | 'json' } | null
+  >(null)
   // Falta de configuração ao otimizar (sem chave e IA local indisponível) →
   // mostramos um botão-CTA com a orientação certa, em vez do erro cru do IPC.
   // null = tudo ok; string = mensagem a exibir no CTA (clicável → Settings).
@@ -839,13 +858,46 @@ export default function PromptBuilder() {
     }
   }
 
+  // Alterna prosa <-> JSON. O conteúdo atual do campo é salvo no slot da versão
+  // que está saindo, então edições manuais não se perdem ao ir e voltar. Se o
+  // outro lado ainda não existe, aí sim otimiza — a partir do prompt original.
+  const handleToggleFormat = async () => {
+    if (!dualPrompt || optimizing) return
+    const alvo: 'text' | 'json' = dualPrompt.showing === 'text' ? 'json' : 'text'
+    const atual = inputText
+    const salvo = { ...dualPrompt, [dualPrompt.showing]: atual }
+    const jaTem = salvo[alvo]
+    if (jaTem) {
+      setInputText(jaTem)
+      setDualPrompt({ ...salvo, showing: alvo })
+      return
+    }
+    setDualPrompt(salvo)
+    await runOptimize(dualPrompt.modelId, alvo, dualPrompt.source)
+  }
+
+  // Guarda o que o Limpar apagou. Era a única ação do app capaz de destruir
+  // um prompt inteiro sem volta — um clique errado custava todo o trabalho.
+  const [limpezaDesfazivel, setLimpezaDesfazivel] = useState<{ tags: PromptTag[]; texto: string } | null>(null)
+
   const handleClearAll = () => {
+    const tinhaAlgo = promptTags.length > 0 || inputText.trim().length > 0
+    if (tinhaAlgo) setLimpezaDesfazivel({ tags: promptTags, texto: inputText })
+    setDualPrompt(null)
     clearAll()
     setInputText('')
     setPromptTranslated(false)
     preTranslateRef.current = null
     setSetupHint(null)
     setOptimizeError(null)
+  }
+
+  const handleDesfazerLimpeza = () => {
+    const alvo = limpezaDesfazivel
+    if (!alvo) return
+    setPromptTags(alvo.tags)
+    setInputText(alvo.texto)
+    setLimpezaDesfazivel(null)
   }
 
   const handleTranslatePrompt = async () => {
@@ -889,22 +941,33 @@ export default function PromptBuilder() {
     }
   }
 
+  // Otimização compartilhada. O formato "json" troca o prompt de sistema no main
+  // E muda o pós-processamento aqui: JSON não pode ter as linhas aparadas.
   const handleSelectModel = async (modelId: string) => {
     if (targetModel === modelId) { setTargetModel(null); setShowModels(false); return }
     setTargetModel(modelId)
     setShowModels(false)
+    await runOptimize(modelId, 'text')
+  }
+
+  const runOptimize = async (modelId: string, format: 'text' | 'json' = 'text', sourceOverride?: string) => {
 
     const parts = [getPromptString(), inputText.trim()].filter(Boolean)
-    const currentPrompt = parts.join(', ')
+    const currentPrompt = sourceOverride ?? parts.join(', ')
     if (!currentPrompt) {
       setOptimizeError('Adicione conteúdo ao prompt primeiro')
       setTimeout(() => setOptimizeError(null), 4000)
       return
     }
 
+    // Um id por tentativa: o botão de cancelar aborta esta chamada específica.
+    const reqId = `opt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    optReqRef.current = reqId
+    ultimaOtimizacaoRef.current = { modelId, format, source: currentPrompt }
     setOptimizing(true)
     setOptimizeError(null)
     setOptimizeErrorHelp(null)
+    setOptRecovery('none')
     setSetupHint(null)
     // Cronômetro + estimativa adaptativa (média das últimas otimizações).
     const startedAt = Date.now()
@@ -914,12 +977,16 @@ export default function PromptBuilder() {
     clearInterval(optTimerRef.current)
     optTimerRef.current = setInterval(() => setOptElapsed(Math.round((Date.now() - startedAt) / 1000)), 500)
     try {
-      const optimized = await window.api.optimizePrompt(currentPrompt, modelId)
+      const optimized = await window.api.optimizePrompt(currentPrompt, modelId, format, reqId)
       recordDuration('optimize', Date.now() - startedAt) // alimenta a estimativa
       // Só o positivo interessa. Descarta qualquer bloco após ---NEGATIVE--- que
       // algum modelo ainda devolva (defesa contra resíduo do prompt do modelo).
       const [positive] = optimized.split('---NEGATIVE---')
-      const text = positive.split('\n').map((l: string) => l.trim()).filter(Boolean).join('\n')
+      // Prosa: apara cada linha e descarta as vazias. JSON: preserva como veio,
+      // senão a indentação do objeto some e o resultado fica ilegível.
+      const text = format === 'json'
+        ? positive.trim()
+        : positive.split('\n').map((l: string) => l.trim()).filter(Boolean).join('\n')
       clearAll()
       setInputText(text)
       setTargetModel(null)
@@ -931,7 +998,24 @@ export default function PromptBuilder() {
         setHistory(newHistory)
         window.api.setSetting(`promptHistory_${currentCanvasId}`, JSON.stringify(newHistory))
       }
+      // Guarda a versão recém-gerada no slot do seu formato e passa a exibi-la.
+      // Só modelos que declaram a variante JSON entram nesse modo.
+      const suportaJson = MODELS.find(m => m.id === modelId)?.json === true
+      if (suportaJson) {
+        setDualPrompt(prev => ({
+          modelId,
+          source: currentPrompt,
+          text: format === 'text' ? text : prev?.text,
+          json: format === 'json' ? text : prev?.json,
+          showing: format,
+        }))
+      } else {
+        setDualPrompt(null)
+      }
     } catch (err: unknown) {
+      // Cancelado pelo usuário: sai em silêncio. Não é falha, não vira erro
+      // vermelho, e o prompt original continua intacto no campo.
+      if (foiCancelado(err)) return
       const msg = err instanceof Error ? err.message : String(err)
       console.error('[optimize]', msg)
       // O erro cruza o IPC embrulhado ("Error invoking remote method '...': Error: X"),
@@ -953,11 +1037,36 @@ export default function PromptBuilder() {
         const f = friendlyError(err, 'Não foi possível aprimorar o prompt.')
         setOptimizeError(f.message)
         setOptimizeErrorHelp([f.action, f.technical].filter(Boolean).join('\n\n'))
+        setOptRecovery(f.recovery)
       }
     } finally {
+      // Só zera se ainda for a tentativa corrente: uma otimização disparada por
+      // cima da anterior não pode apagar o id da mais nova.
+      if (optReqRef.current === reqId) optReqRef.current = null
       setOptimizing(false)
       clearInterval(optTimerRef.current)
     }
+  }
+
+  // Aborta a otimização em voo. O main derruba a requisição HTTP; aqui a UI
+  // volta ao estado anterior na hora, sem esperar a resposta morrer.
+  const handleCancelarOtimizacao = () => {
+    const id = optReqRef.current
+    if (id) void window.api.cancelAI(id).catch(() => {})
+    optReqRef.current = null
+    setOptimizing(false)
+    clearInterval(optTimerRef.current)
+  }
+
+  // Repete a última tentativa com os mesmos argumentos, inclusive o texto de
+  // origem — que já saiu do campo e o usuário não teria como redigitar.
+  const handleTentarDeNovo = () => {
+    const ult = ultimaOtimizacaoRef.current
+    if (!ult || optimizing) return
+    setOptimizeError(null)
+    setOptimizeErrorHelp(null)
+    setOptRecovery('none')
+    void runOptimize(ult.modelId, ult.format, ult.source)
   }
 
   handleSelectModelRef.current = handleSelectModel
@@ -1002,97 +1111,150 @@ export default function PromptBuilder() {
 
           {/* Ações */}
           <div className="flex justify-between items-center gap-2" style={{ paddingBottom: '14px', paddingTop: '8px' }}>
-            {/* Model selector */}
-            <div ref={modelRef} className="relative">
-              <button
-                ref={modelBtnRef}
-                disabled={!hasContent && !optimizeError && !setupHint}
-                onClick={() => {
-                  // Problema de configuração: o botão vira CTA e leva às configurações.
-                  // Some na hora ao clicar (se ainda houver problema, reaparece na próxima tentativa).
-                  if (setupHint) {
-                    setSetupHint(null)
-                    window.dispatchEvent(new CustomEvent('open-settings'))
-                    return
-                  }
-                  if (!showModels && modelBtnRef.current) {
-                    const r = modelBtnRef.current.getBoundingClientRect()
-                    setDropdownPos({ x: r.left, y: r.top })
-                  }
-                  setShowModels(v => !v)
-                }}
-                title={optimizeError ? [optimizeError, optimizeErrorHelp].filter(Boolean).join('\n\n') : undefined}
-                className={`flex items-center gap-1.5 text-[11px] transition-colors px-2 py-1 rounded-md ${setupHint ? 'cursor-pointer' : 'max-w-[200px] truncate'} ${
-                  setupHint
-                    ? 'text-red-400/90 hover:text-red-300 bg-red-500/[0.12] hover:bg-red-500/[0.20]'
-                    : !hasContent && !optimizeError
-                      ? 'text-white/15 cursor-not-allowed'
-                      : optimizeError
-                        ? 'text-red-400/70 hover:text-red-400 hover:bg-white/[0.06]'
-                        : 'text-white/40 hover:text-white/70 hover:bg-white/[0.06]'
-                }`}
-              >
-                <span>{optimizing
-                  ? (optEstimate == null
-                      ? `Otimizando… ${optElapsed}s`
-                      : (optEstimate - optElapsed > 0 ? `Otimizando… restam ~${optEstimate - optElapsed}s` : 'Otimizando…'))
-                  : setupHint ? setupHint : (optimizeError ?? (targetModel ? MODELS.find(m => m.id === targetModel)?.label : 'Otimizar para...'))}</span>
-                {!setupHint && (
-                  <svg width="8" height="8" viewBox="0 0 10 6" fill="none">
-                    <path d={showModels ? 'M1 5L5 1L9 5' : 'M1 1L5 5L9 1'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                )}
-              </button>
-
-              {showModels && createPortal(
-                <div
-                  ref={modelDropdownRef}
-                  className="bg-black/95 backdrop-blur-md rounded-xl shadow-[0_25px_50px_-12px_rgba(0,0,0,0.8)] py-1.5 px-1 min-w-0 w-[150px] z-[9999]"
-                  style={{ position: 'fixed', left: dropdownPos.x, bottom: window.innerHeight - dropdownPos.y + 6 }}
+            <div className="flex items-center gap-1 min-w-0">
+              {/* Model selector */}
+              <div ref={modelRef} className="relative">
+                <button
+                  ref={modelBtnRef}
+                  disabled={!hasContent && !optimizeError && !setupHint}
+                  onClick={() => {
+                    // Problema de configuração: o botão vira CTA e leva às configurações.
+                    // Some na hora ao clicar (se ainda houver problema, reaparece na próxima tentativa).
+                    if (setupHint) {
+                      setSetupHint(null)
+                      window.dispatchEvent(new CustomEvent('open-settings'))
+                      return
+                    }
+                    if (!showModels && modelBtnRef.current) {
+                      const r = modelBtnRef.current.getBoundingClientRect()
+                      setDropdownPos({ x: r.left, y: r.top })
+                    }
+                    setShowModels(v => !v)
+                  }}
+                  title={optimizeError ? [optimizeError, optimizeErrorHelp].filter(Boolean).join('\n\n') : undefined}
+                  className={`flex items-center gap-1.5 text-[11px] transition-colors px-2 py-1 rounded-md ${setupHint ? 'cursor-pointer' : 'max-w-[200px] truncate'} ${
+                    setupHint
+                      ? 'text-red-400/90 hover:text-red-300 bg-red-500/[0.12] hover:bg-red-500/[0.20]'
+                      : !hasContent && !optimizeError
+                        ? 'text-white/15 cursor-not-allowed'
+                        : optimizeError
+                          ? 'text-red-400/70 hover:text-red-400 hover:bg-white/[0.06]'
+                          : 'text-white/40 hover:text-white/70 hover:bg-white/[0.06]'
+                  }`}
                 >
-                  {targetModel && (
-                    <>
-                      <button
-                        className="w-full text-left px-2 py-1 text-[11px] text-white/35 hover:text-white/65 hover:bg-white/[0.08] rounded-md transition-colors cursor-default select-none"
-                        onClick={() => { setTargetModel(null); setShowModels(false) }}
-                      >
-                        Nenhum
-                      </button>
-                      <div className="h-px bg-white/[0.06] mx-2 my-1" />
-                    </>
+                  <span>{optimizing
+                    ? (optEstimate == null
+                        ? `Otimizando… ${optElapsed}s`
+                        : (optEstimate - optElapsed > 0 ? `Otimizando… restam ~${optEstimate - optElapsed}s` : 'Otimizando…'))
+                    : setupHint ? setupHint : (optimizeError ?? (targetModel ? MODELS.find(m => m.id === targetModel)?.label : 'Otimizar para...'))}</span>
+                  {!setupHint && !optimizing && (
+                    <svg width="8" height="8" viewBox="0 0 10 6" fill="none">
+                      <path d={showModels ? 'M1 5L5 1L9 5' : 'M1 1L5 5L9 1'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
                   )}
-                  {MODEL_GROUPS.map((grp, gi) => (
-                    <div key={grp.group}>
-                      {gi > 0 && <div className="h-px bg-white/[0.06] mx-2 my-1" />}
-                      <div className="px-2 pt-1 pb-0.5 text-[9px] font-bold uppercase tracking-widest text-white/25">
-                        {grp.group}
-                      </div>
-                      {grp.models.map(m => (
+                </button>
+
+
+                {showModels && createPortal(
+                  <div
+                    ref={modelDropdownRef}
+                    className="bg-black/95 backdrop-blur-md rounded-xl shadow-[0_25px_50px_-12px_rgba(0,0,0,0.8)] py-1.5 px-1 min-w-0 w-[150px] z-[9999]"
+                    style={{ position: 'fixed', left: dropdownPos.x, bottom: window.innerHeight - dropdownPos.y + 6 }}
+                  >
+                    {targetModel && (
+                      <>
                         <button
-                          key={m.id}
-                          className={`w-full text-left px-2 py-1 text-[11px] rounded-md transition-colors cursor-default select-none flex items-center gap-1.5 ${
-                            targetModel === m.id
-                              ? 'text-orange-300/80 bg-orange-500/[0.12]'
-                              : 'text-white/75 hover:text-white hover:bg-white/[0.08]'
-                          }`}
-                          onClick={() => handleSelectModel(m.id)}
+                          className="w-full text-left px-2 py-1 text-[11px] text-white/35 hover:text-white/65 hover:bg-white/[0.08] rounded-md transition-colors cursor-default select-none"
+                          onClick={() => { setTargetModel(null); setShowModels(false) }}
                         >
-                          <span className="flex-1">{m.label}</span>
-                          {m.nsfw && (
-                            <span className="text-[8px] font-bold px-1 py-px rounded leading-none" style={{ color: 'rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)' }}>
-                              +18
-                            </span>
-                          )}
+                          Nenhum
                         </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>,
-                document.body
+                        <div className="h-px bg-white/[0.06] mx-2 my-1" />
+                      </>
+                    )}
+                    {MODEL_GROUPS.map((grp, gi) => (
+                      <div key={grp.group}>
+                        {gi > 0 && <div className="h-px bg-white/[0.06] mx-2 my-1" />}
+                        <div className="px-2 pt-1 pb-0.5 text-[9px] font-bold uppercase tracking-widest text-white/25">
+                          {grp.group}
+                        </div>
+                        {grp.models.map(m => (
+                          <button
+                            key={m.id}
+                            className={`w-full text-left px-2 py-1 text-[11px] rounded-md transition-colors cursor-default select-none flex items-center gap-1.5 ${
+                              targetModel === m.id
+                                ? 'text-orange-300/80 bg-orange-500/[0.12]'
+                                : 'text-white/75 hover:text-white hover:bg-white/[0.08]'
+                            }`}
+                            onClick={() => handleSelectModel(m.id)}
+                          >
+                            <span className="flex-1">{m.label}</span>
+                            {m.nsfw && (
+                              <span className="text-[8px] font-bold px-1 py-px rounded leading-none" style={{ color: 'rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)' }}>
+                                +18
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>,
+                  document.body
+                )}
+              </div>
+
+              {/* Enquanto otimiza: um X que aborta de verdade a chamada no main.
+                  Espera que se pode interromper incomoda muito menos do que
+                  espera forçada — e escolher o modelo errado deixa de custar
+                  os 15s inteiros. */}
+              {optimizing && (
+                <button
+                  onClick={handleCancelarOtimizacao}
+                  title="Cancelar"
+                  className="w-5 h-5 flex items-center justify-center rounded-md text-white/30 hover:text-white/70 hover:bg-white/[0.08] transition-colors"
+                >
+                  <svg width="8" height="8" viewBox="0 0 10 10" fill="none">
+                    <path d="M0.5 0.5L9.5 9.5M9.5 0.5L0.5 9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+                  </svg>
+                </button>
+              )}
+
+              {/* Erro com saída: o texto já dizia o que fazer, agora dá para FAZER.
+                  'retry' repete a mesma chamada, 'settings' abre onde se resolve. */}
+              {!optimizing && optimizeError && optRecovery !== 'none' && (
+                <button
+                  onClick={() => {
+                    if (optRecovery === 'settings') {
+                      setOptimizeError(null)
+                      setOptRecovery('none')
+                      window.dispatchEvent(new CustomEvent('open-settings'))
+                    } else handleTentarDeNovo()
+                  }}
+                  className="whitespace-nowrap text-[11px] px-2 py-1 rounded-md text-white/45 hover:text-white/80 bg-white/[0.06] hover:bg-white/[0.12] transition-colors"
+                >
+                  {optRecovery === 'settings' ? 'Configurações' : 'Tentar de novo'}
+                </button>
               )}
             </div>
 
             <div className="flex items-center gap-2">
+            {dualPrompt && (
+              <button
+                onClick={handleToggleFormat}
+                disabled={optimizing}
+                title={dualPrompt.showing === 'text'
+                  ? 'Reescrever este prompt como JSON estruturado'
+                  : 'Voltar para a versão em texto'}
+                className={`text-[10px] font-bold tracking-wide px-2 py-0.5 rounded-md transition-colors shrink-0 ${
+                  optimizing
+                    ? 'text-white/20 cursor-default'
+                    : 'text-white/40 hover:text-orange-300/90 hover:bg-orange-500/[0.12]'
+                }`}
+                style={{ border: '1px solid rgba(255,255,255,0.12)' }}
+              >
+                {dualPrompt.showing === 'text' ? 'JSON' : 'TEXTO'}
+              </button>
+            )}
             <MicButton hasCloudKey={hasOpenAIKey} onTranscript={text => setInputText(prev => prev ? prev + ' ' + text : text)} />
             {hasContent && (
               <button
@@ -1122,6 +1284,15 @@ export default function PromptBuilder() {
                 className="text-[11px] text-white/30 hover:text-white/65 transition-colors px-2 py-0.5 rounded-md hover:bg-white/[0.06] shrink-0"
               >
                 Limpar
+              </button>
+            )}
+            {!hasContent && limpezaDesfazivel && (
+              <button
+                onClick={handleDesfazerLimpeza}
+                title="Restaurar o prompt que você acabou de limpar"
+                className="text-[11px] text-white/30 hover:text-white/65 transition-colors px-2 py-0.5 rounded-md hover:bg-white/[0.06] shrink-0"
+              >
+                Desfazer
               </button>
             )}
             <button

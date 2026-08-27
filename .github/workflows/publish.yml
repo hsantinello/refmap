@@ -45,11 +45,24 @@ jobs:
         # Dois DMGs separados evitam esse passo por completo.
         run: npx electron-vite build && npx electron-builder --mac --publish always
 
+      - name: Montar descrição da release
+        id: notas
+        shell: bash
+        # O corpo vem do changelog.json, mesma fonte do sininho no app. Sem ele
+        # a release sai sem descrição e quem ainda não atualizou não vê as
+        # novidades — o changelog embarcado no app dele para na versão instalada.
+        run: |
+          {
+            echo 'body<<CHANGELOG_EOF'
+            node scripts/release-notes.mjs "${{ github.event.inputs.version || '0.0.0' }}"
+            echo 'CHANGELOG_EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Publicar no Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.event.inputs.version || '0.0.0' }}
           name: "Ref Map v${{ github.event.inputs.version || '0.0.0' }}"
+          body: ${{ steps.notas.outputs.body }}
           draft: false
           prerelease: false
           # SEM "files": quem sobe os artefatos é o electron-builder (--publish
@@ -82,11 +95,24 @@ jobs:
         # o latest.yml nunca sobe, deixando o auto-update cego.
         run: npx electron-vite build && npx electron-builder --win --publish always
 
+      - name: Montar descrição da release
+        id: notas
+        shell: bash
+        # O corpo vem do changelog.json, mesma fonte do sininho no app. Sem ele
+        # a release sai sem descrição e quem ainda não atualizou não vê as
+        # novidades — o changelog embarcado no app dele para na versão instalada.
+        run: |
+          {
+            echo 'body<<CHANGELOG_EOF'
+            node scripts/release-notes.mjs "${{ github.event.inputs.version || '0.0.0' }}"
+            echo 'CHANGELOG_EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Publicar no Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.event.inputs.version || '0.0.0' }}
           name: "Ref Map v${{ github.event.inputs.version || '0.0.0' }}"
+          body: ${{ steps.notas.outputs.body }}
           draft: false
           prerelease: false
           # SEM "files": ver a nota no job do macOS. O electron-builder já sobe

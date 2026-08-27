@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
+export interface UpdateAvailableInfo {
+  version: string
+  releaseDate?: string
+  notes: Array<{ version: string; items: string[] }>
+}
+
 const api = {
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
@@ -37,7 +43,8 @@ const api = {
 
   // Metadata
   extractMetadata: (imagePath: string) => ipcRenderer.invoke('image:extractMetadata', imagePath),
-  analyzeWithAI: (imagePath: string, lang?: 'en' | 'pt', force?: boolean) => ipcRenderer.invoke('image:analyzeWithAI', imagePath, lang, force),
+  // requestId opcional: quando informado, a chamada pode ser abortada por cancelAI.
+  analyzeWithAI: (imagePath: string, lang?: 'en' | 'pt', force?: boolean, requestId?: string) => ipcRenderer.invoke('image:analyzeWithAI', imagePath, lang, force, requestId),
   createThumbnail: (imagePath: string): Promise<string> => ipcRenderer.invoke('image:createThumbnail', imagePath),
   readClipboardImage: (): Promise<string | null> => ipcRenderer.invoke('clipboard:readImage'),
   copyImageToClipboard: (imagePath: string): Promise<boolean> => ipcRenderer.invoke('clipboard:writeImage', imagePath),
@@ -77,9 +84,11 @@ const api = {
   deleteCanvas: (id: string) => ipcRenderer.invoke('canvas:delete', id),
 
   // Prompt optimization
-  optimizePrompt: (prompt: string, modelId: string): Promise<string> => ipcRenderer.invoke('prompt:optimize', prompt, modelId),
+  optimizePrompt: (prompt: string, modelId: string, format: 'text' | 'json' = 'text', requestId?: string): Promise<string> => ipcRenderer.invoke('prompt:optimize', prompt, modelId, format, requestId),
   // Prompt de animação a partir de 2 imagens (first/last frame)
-  animatePrompt: (firstPath: string, lastPath: string): Promise<string> => ipcRenderer.invoke('prompt:animate', firstPath, lastPath),
+  animatePrompt: (firstPath: string, lastPath: string, requestId?: string): Promise<string> => ipcRenderer.invoke('prompt:animate', firstPath, lastPath, requestId),
+  // Aborta a requisição em andamento. false = já tinha terminado sozinha.
+  cancelAI: (requestId: string): Promise<boolean> => ipcRenderer.invoke('ai:cancel', requestId),
 
   // Tag translation
   translateTags: (values: string[], targetLang: 'pt' | 'en'): Promise<string[]> => ipcRenderer.invoke('tags:translate', values, targetLang),
@@ -91,8 +100,11 @@ const api = {
   checkForUpdates: () => ipcRenderer.invoke('updater:check'),
   downloadUpdate: () => ipcRenderer.invoke('updater:download'),
   installUpdate: () => ipcRenderer.invoke('updater:install'),
-  onUpdateAvailable: (cb: (info: { version: string }) => void) => {
-    const handler = (_e: Electron.IpcRendererEvent, info: { version: string }) => cb(info)
+  // 'notes' vem das release notes do GitHub, já convertidas de HTML para linhas
+  // de texto no main. Vem vazio quando a release foi publicada sem descrição —
+  // nesse caso a UI usa o changelog embarcado no app.
+  onUpdateAvailable: (cb: (info: UpdateAvailableInfo) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, info: UpdateAvailableInfo) => cb(info)
     ipcRenderer.on('updater:updateAvailable', handler)
     return () => ipcRenderer.off('updater:updateAvailable', handler)
   },

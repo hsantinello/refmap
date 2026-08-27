@@ -11,6 +11,7 @@ import About from './components/About'
 import Auth from './components/Auth'
 import UpdateBanner from './components/UpdateBanner'
 import LocalInstallBanner, { type LocalInstallProgress } from './components/LocalInstallBanner'
+import { ConfirmHost } from './components/ConfirmDialog'
 import { ensureWhisper, isWhisperReady } from './lib/localWhisper'
 import { useCanvasStore, usePromptStore } from './store'
 import { supabase, isLicenseActive } from './lib/supabase'
@@ -463,13 +464,14 @@ export default function App() {
       <div className="fixed top-[44px] left-1/2 -translate-x-1/2 z-40 flex flex-col items-center gap-2 pointer-events-none">
         <UpdateBanner />
         <AnimatePresence>
-          {installProgress && !showSettings && <LocalInstallBanner progress={installProgress} />}
+          {installProgress && !showSettings && <LocalInstallBanner progress={installProgress} onRetry={startLocalInstall} />}
         </AnimatePresence>
       </div>
 
       {showSettings && <Settings onClose={handleCloseSettings} onKeySaved={handleKeySaved} initialView={settingsView} installProgress={installProgress} onInstallLocal={startLocalInstall} onUninstallLocal={startLocalUninstall} />}
       {showAbout && <About onClose={() => setShowAbout(false)} />}
       {showOnboarding && <Onboarding onComplete={() => setShowOnboarding(false)} />}
+      <ConfirmHost />
     </div>
   )
 }

@@ -1,0 +1,28 @@
+[
+  {
+    "version": "0.0.28",
+    "date": "2026-08-26",
+    "items": [
+      "Nano Banana agora segue o guia do Nano Banana Pro e ganhou um botão JSON, ao lado do microfone, que converte o prompt para JSON estruturado e volta para texto.",
+      "Veo 3 também gera prompt em JSON, com câmera, lente, iluminação, composição, áudio em camadas e lista de elementos proibidos.",
+      "Otimização de prompt e análise de imagem agora podem ser canceladas no meio, com um X ao lado do progresso.",
+      "O Limpar do prompt ganhou Desfazer, e favoritar e agrupar imagens entraram no Ctrl+Z.",
+      "As confirmações deixaram de usar a caixa cinza do Windows e agora seguem o visual do app.",
+      "Erros passaram a oferecer o caminho de volta: Tentar de novo ou ir direto às Configurações.",
+      "Sininho de novidades na barra de título — este aqui."
+    ]
+  },
+  {
+    "version": "0.0.27",
+    "date": "2026-08-25",
+    "items": [
+      "Wan 3.0 disponível no Prompt Builder.",
+      "LTX renomeado para LTX 2.5 e Seedance para Seedance 2.5.",
+      "Prompts para MiniMax H3 agora sempre trazem os tempos de cada acontecimento do vídeo.",
+      "A otimização deixou de inventar coisas que você não escreveu: o seu texto passou a ter o maior peso.",
+      "Erros da interface reescritos em linguagem clara, com a solução junto.",
+      "Corrigida a falha de arquivo em uso ao instalar a IA local.",
+      "Versão para Mac voltou a ser publicada, com atualização automática funcionando."
+    ]
+  }
+]

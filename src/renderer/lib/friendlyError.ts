@@ -8,10 +8,18 @@
 //   • action  — o que o usuário pode fazer, quando há algo ao alcance dele.
 //   • technical — a string original, para tooltip/suporte. Nunca é o texto principal.
 
+// Que botão a UI deve oferecer ao lado da mensagem. O texto de 'action' diz o
+// que fazer; isto deixa a UI FAZER, em vez de só instruir.
+//   retry    — refazer a mesma operação resolve (rede, limite, sobrecarga).
+//   settings — depende de configuração (chave ausente/inválida, IA local).
+//   none     — nada que um botão resolva (arquivo sumiu, conteúdo bloqueado).
+export type Recovery = 'retry' | 'settings' | 'none'
+
 export interface FriendlyError {
   message: string
   action?: string
   technical: string
+  recovery: Recovery
 }
 
 // O erro cruza o IPC embrulhado: "Error invoking remote method 'x': Error: EBUSY...".
@@ -35,7 +43,7 @@ function cleanTechnical(raw: string): string {
     .trim()
 }
 
-type Rule = { test: RegExp; message: string; action?: string }
+type Rule = { test: RegExp; message: string; action?: string; recovery: Recovery }
 
 // ORDEM IMPORTA: do mais específico para o mais genérico. "connection", por
 // exemplo, casaria com vários casos acima se viesse antes deles.
@@ -43,11 +51,13 @@ const RULES: Rule[] = [
   // ── IA local (Ollama) ────────────────────────────────────────────────────
   {
     test: /LOCAL_AI_UNAVAILABLE/i,
+    recovery: 'settings',
     message: 'A IA local não está rodando no seu computador.',
     action: 'Abra as Configurações e clique em "Baixar IA Local" — ou conecte uma chave de API para usar a IA na nuvem.',
   },
   {
     test: /try pulling|no such model|model .*not found|modelo .*n[ãa]o encontrado/i,
+    recovery: 'settings',
     message: 'O modelo da IA local ainda não terminou de baixar.',
     action: 'Abra as Configurações e clique em "Baixar IA Local" para concluir o download.',
   },
@@ -55,21 +65,25 @@ const RULES: Rule[] = [
   // ── Sistema de arquivos ──────────────────────────────────────────────────
   {
     test: /\bEBUSY\b|\bETXTBSY\b|\bEPERM\b|\bEACCES\b|being used by another process/i,
+    recovery: 'retry',
     message: 'Outro programa do seu computador está bloqueando o arquivo — normalmente o antivírus, que verifica downloads novos.',
     action: 'Aguarde alguns segundos e clique em "Tentar de novo".',
   },
   {
     test: /\bENOSPC\b|no space left|disk full/i,
+    recovery: 'retry',
     message: 'Não há espaço em disco suficiente para concluir.',
     action: 'Libere espaço no disco e tente de novo.',
   },
   {
     test: /\bEMFILE\b|too many open files/i,
+    recovery: 'none',
     message: 'O computador atingiu o limite de arquivos abertos ao mesmo tempo.',
     action: 'Feche e reabra o app.',
   },
   {
     test: /\bENOENT\b|no such file/i,
+    recovery: 'none',
     message: 'O arquivo não foi encontrado onde o app esperava.',
     action: 'Ele pode ter sido movido, renomeado ou apagado. Importe a imagem de novo.',
   },
@@ -77,21 +91,25 @@ const RULES: Rule[] = [
   // ── Chave de API ─────────────────────────────────────────────────────────
   {
     test: /API key not configured|chave n[ãa]o configurada|Could not resolve authentication/i,
+    recovery: 'settings',
     message: 'Nenhuma chave de API está configurada.',
     action: 'Abra as Configurações para conectar uma chave — ou baixe a IA local, que roda no seu PC sem custo.',
   },
   {
     test: /\b401\b|\b403\b|invalid[_ ]api[_ ]key|incorrect api key|unauthorized|forbidden|authentication/i,
+    recovery: 'settings',
     message: 'O provedor de IA recusou a sua chave de API.',
     action: 'Confira em Configurações se a chave está correta e ainda ativa no painel do provedor.',
   },
   {
     test: /insufficient[_ ]quota|billing|payment|out of credit|sem cr[ée]dito/i,
+    recovery: 'none',
     message: 'A sua conta no provedor de IA está sem créditos.',
     action: 'Adicione créditos no painel do provedor e tente de novo.',
   },
   {
     test: /\b429\b|rate.?limit|too many requests|quota exceeded/i,
+    recovery: 'retry',
     message: 'Você atingiu o limite de uso do provedor de IA.',
     action: 'Aguarde cerca de um minuto e tente de novo.',
   },
@@ -99,26 +117,31 @@ const RULES: Rule[] = [
   // ── Provedor / rede ──────────────────────────────────────────────────────
   {
     test: /non-serverless|not available serverless/i,
+    recovery: 'settings',
     message: 'Esse modelo não está disponível no plano da sua conta no provedor.',
     action: 'Troque de provedor de IA nas Configurações, ou use a IA local.',
   },
   {
     test: /content[_ ]policy|safety|flagged|moderation|refus/i,
+    recovery: 'none',
     message: 'O provedor de IA recusou o conteúdo por política de uso.',
     action: 'Ajuste o texto, ou use a IA local — ela roda no seu PC e não tem esse filtro.',
   },
   {
     test: /\b5\d\d\b|overloaded|bad gateway|service unavailable|internal server error/i,
+    recovery: 'retry',
     message: 'O provedor de IA está instável neste momento.',
     action: 'Tente de novo em alguns instantes.',
   },
   {
     test: /timeout|timed out|\bETIMEDOUT\b|aborted|AbortError/i,
+    recovery: 'retry',
     message: 'A operação demorou mais do que o esperado e foi interrompida.',
     action: 'Tente de novo. Se continuar, verifique a sua conexão com a internet.',
   },
   {
     test: /\bENOTFOUND\b|\bECONNREFUSED\b|\bECONNRESET\b|\bEAI_AGAIN\b|getaddrinfo|fetch failed|network|connection/i,
+    recovery: 'retry',
     message: 'Não foi possível conectar à internet.',
     action: 'Verifique a sua conexão e tente de novo.',
   },
@@ -126,16 +149,19 @@ const RULES: Rule[] = [
   // ── Instalação da IA local ───────────────────────────────────────────────
   {
     test: /Instalador saiu com c[óo]digo/i,
+    recovery: 'retry',
     message: 'A instalação da IA local foi interrompida antes de terminar.',
     action: 'Clique em "Tentar de novo". Se repetir, instale o Ollama manualmente pelo site ollama.com.',
   },
   {
     test: /apenas no Windows|only on Windows/i,
+    recovery: 'none',
     message: 'A instalação automática da IA local só está disponível no Windows por enquanto.',
     action: 'No Mac, instale o Ollama pelo site ollama.com e o app o reconhece sozinho.',
   },
   {
     test: /Download falhou/i,
+    recovery: 'retry',
     message: 'O download não foi concluído.',
     action: 'Verifique a sua conexão e clique em "Tentar de novo".',
   },
@@ -157,13 +183,14 @@ export function friendlyError(input: unknown, fallback?: string): FriendlyError 
 
   for (const rule of RULES) {
     if (rule.test.test(raw)) {
-      return { message: rule.message, action: rule.action, technical }
+      return { message: rule.message, action: rule.action, technical, recovery: rule.recovery }
     }
   }
   return {
     message: fallback || FALLBACK_MESSAGE,
     action: FALLBACK_ACTION,
     technical,
+    recovery: 'retry',
   }
 }
 
@@ -171,4 +198,17 @@ export function friendlyError(input: unknown, fallback?: string): FriendlyError 
 export function friendlyErrorText(input: unknown, fallback?: string): string {
   const { message, action } = friendlyError(input, fallback)
   return action ? `${message} ${action}` : message
+}
+
+/**
+ * O usuário cancelou? Erros de abort chegam com nomes diferentes de cada SDK
+ * e embrulhados pelo IPC; o main normaliza tudo para 'ABORTED'.
+ *
+ * Checar SEMPRE antes de exibir erro: cancelar é uma escolha, não uma falha,
+ * e não deve pintar nada de vermelho na tela.
+ */
+export function foiCancelado(input: unknown): boolean {
+  if (!input) return false
+  const txt = input instanceof Error ? input.message : String(input)
+  return /ABORTED/.test(txt)
 }

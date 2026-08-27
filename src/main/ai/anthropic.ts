@@ -3,7 +3,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import { buildVisionPrompt } from './visionPrompt'
 
-export async function analyzeWithAnthropic(imagePath: string, apiKey: string, lang: 'en' | 'pt' = 'en'): Promise<string> {
+export async function analyzeWithAnthropic(imagePath: string, apiKey: string, lang: 'en' | 'pt' = 'en', signal?: AbortSignal): Promise<string> {
   // timeout + capped retries so a slow/hung endpoint fails cleanly instead of
   // leaving the UI spinner analyzing forever (mesmo padrão do openai.ts).
   const client = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 })
@@ -24,7 +24,7 @@ export async function analyzeWithAnthropic(imagePath: string, apiKey: string, la
         { type: 'text', text: buildVisionPrompt(lang) },
       ],
     }],
-  })
+  }, signal ? { signal } : undefined)
 
   return response.content[0]?.type === 'text' ? response.content[0].text.trim() : ''
 }

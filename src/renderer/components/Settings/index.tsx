@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import type { LocalInstallProgress } from '../LocalInstallBanner'
 import { friendlyError } from '../../lib/friendlyError'
+import { confirmar } from '../ConfirmDialog'
 
 type View = 'choose' | 'api' | 'local'
 
@@ -53,8 +54,14 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
     }
   }, [installProgress])
 
-  const handleUninstall = () => {
-    if (!window.confirm('Desinstalar o Ollama? A IA local deixará de funcionar até você instalar novamente.')) return
+  const handleUninstall = async () => {
+    const ok = await confirmar({
+      titulo: 'Desinstalar a IA local?',
+      mensagem: 'O Ollama será removido do seu computador. A análise de imagens e a otimização de prompts passam a exigir uma chave de API até você instalar de novo.',
+      confirmar: 'Desinstalar',
+      perigo: true,
+    })
+    if (!ok) return
     onUninstallLocal?.()
   }
 
@@ -148,6 +155,17 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                   <div className="rounded-lg p-2.5" title={f.technical} style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.22)' }}>
                     <p className="text-[11px] text-red-400/90">{f.message}</p>
                     {f.action && <p className="text-[11px] text-white/45 mt-1">{f.action}</p>}
+                    {/* Dizer o que fazer não basta se o usuário ainda tiver que ir
+                        procurar onde fazer. Quando a saída é repetir, o botão fica aqui. */}
+                    {f.recovery === 'retry' && onInstallLocal && (
+                      <button
+                        onClick={onInstallLocal}
+                        style={{ border: '1px solid rgba(255,255,255,0.12)' }}
+                        className="mt-2 px-2 py-1 rounded-md text-[11px] text-white/60 hover:text-white/90 hover:bg-white/[0.08] transition-colors"
+                      >
+                        Tentar de novo
+                      </button>
+                    )}
                   </div>
                 )
               })()

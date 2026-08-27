@@ -6,7 +6,7 @@ import { buildVisionPrompt } from './visionPrompt'
 export async function analyzeWithOpenAI(
   imagePath: string,
   apiKey: string,
-  options?: { baseURL?: string; model?: string; lang?: 'en' | 'pt' }
+  options?: { baseURL?: string; model?: string; lang?: 'en' | 'pt'; signal?: AbortSignal }
 ): Promise<string> {
   // timeout + capped retries so a slow/hung endpoint fails cleanly instead of
   // leaving the UI spinner analyzing forever (Together serverless can stall).
@@ -41,7 +41,7 @@ export async function analyzeWithOpenAI(
         { type: 'text', text: buildVisionPrompt(options?.lang) },
       ],
     }],
-  })
+  }, options?.signal ? { signal: options.signal } : undefined)
 
   return (response.choices[0]?.message?.content ?? '').trim()
 }

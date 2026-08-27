@@ -10,7 +10,7 @@ export interface LocalInstallProgress {
 
 // Barra fina no topo que mostra o progresso do download/instalação da IA local.
 // Fica no App (sempre montado), então persiste mesmo com as Settings fechadas.
-export default function LocalInstallBanner({ progress }: { progress: LocalInstallProgress }) {
+export default function LocalInstallBanner({ progress, onRetry }: { progress: LocalInstallProgress; onRetry?: () => void }) {
   const { phase, percent, message, error } = progress
   const isError = phase === 'error'
   const isDone = phase === 'done'
@@ -53,6 +53,18 @@ export default function LocalInstallBanner({ progress }: { progress: LocalInstal
             />
           </div>
         </div>
+      )}
+
+      {/* Instalar de novo dali mesmo. A maioria das falhas aqui é transitória
+          (arquivo travado, rede caindo no meio do download) e some na segunda
+          tentativa — mas antes o usuário tinha que caçar o botão nas Configurações. */}
+      {isError && onRetry && friendly!.recovery === 'retry' && (
+        <button
+          onClick={onRetry}
+          className="shrink-0 whitespace-nowrap px-2 py-0.5 rounded-full text-[11px] text-white/60 hover:text-white/90 bg-white/[0.08] hover:bg-white/[0.16] transition-colors"
+        >
+          Tentar de novo
+        </button>
       )}
 
       {isDone && (

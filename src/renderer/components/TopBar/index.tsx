@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { type Node } from '@xyflow/react'
 import { useCanvasStore, usePromptStore, type ImageNodeData, type ComfyParams } from '../../store'
 import logoUrl from '../../assets/logo.png'
+import { confirmar } from '../ConfirmDialog'
+import UpdateBell from '../UpdateBell'
 
 interface TopBarProps {
   onOpenSettings: (view?: 'choose' | 'api' | 'local') => void
@@ -50,8 +52,15 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
 
   const handleConnectionClick = () => {
     if (hasApiKey) {
-      const confirmed = window.confirm('Remover sua API Key? O app não conseguirá analisar imagens sem ela.')
-      if (confirmed) onRemoveApiKey()
+      void (async () => {
+        const ok = await confirmar({
+          titulo: 'Remover a chave de API?',
+          mensagem: 'O app deixa de usar a IA na nuvem. Você pode colar a chave de novo a qualquer momento, ou usar a IA local, que roda no seu PC.',
+          confirmar: 'Remover',
+          perigo: true,
+        })
+        if (ok) onRemoveApiKey()
+      })()
       return
     }
     // Sem chave: modo Local → abre a aba Local; senão a tela de escolha.
@@ -263,7 +272,12 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
       : ((await window.api.loadCanvas(id)) as { nodes: unknown[] }).nodes.length > 0
 
     if (hasNodes) {
-      const confirmed = window.confirm(`Apagar "${name}"? Esta ação não pode ser desfeita.`)
+      const confirmed = await confirmar({
+        titulo: `Apagar "${name}"?`,
+        mensagem: 'Todas as imagens e tags deste canvas serão perdidas. Esta ação não pode ser desfeita.',
+        confirmar: 'Apagar',
+        perigo: true,
+      })
       if (!confirmed) return
     }
 
@@ -601,6 +615,8 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
       <div
         className="flex items-center gap-2 px-3 shrink-0"
       >
+        <UpdateBell />
+
         <button
           onClick={handleConnectionClick}
           className="no-drag-region flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/[0.04] border border-white/[0.06] hover:bg-white/[0.09] hover:border-white/[0.1] transition-all"
