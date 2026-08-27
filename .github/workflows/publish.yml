@@ -17,9 +17,48 @@ permissions:
   contents: write
 
 jobs:
+  # Cria a release ANTES dos builds. Sem este job, os dois electron-builder
+  # (Windows e Mac) corriam para criar a MESMA release: quem chegava depois
+  # tomava 422 "Published releases must have a valid tag" e não subia nada.
+  # Na v0.0.27 passou por sorte de tempo; na v0.0.28 o Mac perdeu a corrida.
+  # Com a release já existindo e publicada, os builds apenas sobem os arquivos.
+  release:
+    name: Criar a release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Montar descrição da release
+        id: notas
+        shell: bash
+        # O corpo vem do changelog.json, mesma fonte do sininho no app. Sem ele
+        # a release sai sem descrição e quem ainda não atualizou não vê as
+        # novidades — o changelog embarcado no app dele para na versão instalada.
+        run: |
+          {
+            echo 'body<<CHANGELOG_EOF'
+            node scripts/release-notes.mjs "${{ github.event.inputs.version || '0.0.0' }}"
+            echo 'CHANGELOG_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version || '0.0.0' }}
+          name: "Ref Map v${{ github.event.inputs.version || '0.0.0' }}"
+          body: ${{ steps.notas.outputs.body }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build-mac:
     name: Build macOS (x64 + arm64)
     runs-on: macos-latest
+    needs: release
     # Permite reprocessar só o Mac sem republicar um Windows que já está no ar.
     if: ${{ inputs.platform == 'all' || inputs.platform == 'mac' }}
     steps:
@@ -45,38 +84,10 @@ jobs:
         # Dois DMGs separados evitam esse passo por completo.
         run: npx electron-vite build && npx electron-builder --mac --publish always
 
-      - name: Montar descrição da release
-        id: notas
-        shell: bash
-        # O corpo vem do changelog.json, mesma fonte do sininho no app. Sem ele
-        # a release sai sem descrição e quem ainda não atualizou não vê as
-        # novidades — o changelog embarcado no app dele para na versão instalada.
-        run: |
-          {
-            echo 'body<<CHANGELOG_EOF'
-            node scripts/release-notes.mjs "${{ github.event.inputs.version || '0.0.0' }}"
-            echo 'CHANGELOG_EOF'
-          } >> "$GITHUB_OUTPUT"
-      - name: Publicar no Releases
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ github.event.inputs.version || '0.0.0' }}
-          name: "Ref Map v${{ github.event.inputs.version || '0.0.0' }}"
-          body: ${{ steps.notas.outputs.body }}
-          draft: false
-          prerelease: false
-          # SEM "files": quem sobe os artefatos é o electron-builder (--publish
-          # always), com os nomes que o latest-mac.yml referencia. Subir os
-          # mesmos arquivos aqui gerava duplicatas com nome pontuado
-          # ("Ref.Map-...", o GitHub troca espaço por ponto) e blockmaps que não
-          # casavam com o updater. Este passo agora só garante que a release
-          # exista com o título certo.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   build-win:
     name: Build Windows (x64)
     runs-on: windows-latest
+    needs: release
     if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
     steps:
       - uses: actions/checkout@v4
@@ -94,28 +105,3 @@ jobs:
         # --publish always é obrigatório: sem ele o electron-builder só builda e
         # o latest.yml nunca sobe, deixando o auto-update cego.
         run: npx electron-vite build && npx electron-builder --win --publish always
-
-      - name: Montar descrição da release
-        id: notas
-        shell: bash
-        # O corpo vem do changelog.json, mesma fonte do sininho no app. Sem ele
-        # a release sai sem descrição e quem ainda não atualizou não vê as
-        # novidades — o changelog embarcado no app dele para na versão instalada.
-        run: |
-          {
-            echo 'body<<CHANGELOG_EOF'
-            node scripts/release-notes.mjs "${{ github.event.inputs.version || '0.0.0' }}"
-            echo 'CHANGELOG_EOF'
-          } >> "$GITHUB_OUTPUT"
-      - name: Publicar no Releases
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ github.event.inputs.version || '0.0.0' }}
-          name: "Ref Map v${{ github.event.inputs.version || '0.0.0' }}"
-          body: ${{ steps.notas.outputs.body }}
-          draft: false
-          prerelease: false
-          # SEM "files": ver a nota no job do macOS. O electron-builder já sobe
-          # o instalador, o blockmap e o latest.yml com os nomes corretos.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
