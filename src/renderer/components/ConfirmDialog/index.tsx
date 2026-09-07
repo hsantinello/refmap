@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { create } from 'zustand'
+import { useT } from '../../i18n'
 
 // Diálogo de confirmação do próprio app, no lugar do window.confirm.
 //
@@ -51,6 +52,7 @@ export function confirmar(opcoes: OpcoesConfirmacao): Promise<boolean> {
 
 /** Montado uma vez no App. Sem ele, confirmar() nunca resolve. */
 export function ConfirmHost() {
+  const t = useT()
   const pedido = useConfirmStore(s => s.pedido)
   const fechar = useConfirmStore(s => s.fechar)
   const [saindo, setSaindo] = useState(false)
@@ -107,7 +109,7 @@ export function ConfirmHost() {
             style={{ paddingTop: '9px', paddingBottom: '9px', border: '1px solid rgba(255,255,255,0.10)' }}
             className="flex-1 rounded-lg text-[12px] text-white/45 hover:text-white/70 hover:bg-white/[0.05] transition-colors"
           >
-            {pedido.cancelar ?? 'Cancelar'}
+            {pedido.cancelar ?? t('common.cancel')}
           </button>
           <button
             onClick={() => responder(true)}
@@ -115,7 +117,7 @@ export function ConfirmHost() {
             style={{ paddingTop: '9px', paddingBottom: '9px', borderWidth: '1px', borderStyle: 'solid' }}
             className={`flex-1 rounded-lg text-[12px] transition-colors ${corConfirmar}`}
           >
-            {pedido.confirmar ?? 'Confirmar'}
+            {pedido.confirmar ?? t('common.confirm')}
           </button>
         </div>
       </div>

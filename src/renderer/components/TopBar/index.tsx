@@ -4,6 +4,7 @@ import { useCanvasStore, usePromptStore, type ImageNodeData, type ComfyParams } 
 import logoUrl from '../../assets/logo.png'
 import { confirmar } from '../ConfirmDialog'
 import UpdateBell from '../UpdateBell'
+import { useT } from '../../i18n'
 
 interface TopBarProps {
   onOpenSettings: (view?: 'choose' | 'api' | 'local') => void
@@ -21,6 +22,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
   const [alwaysOnTop, setAlwaysOnTop] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const t = useT()
   const [showLogoMenu, setShowLogoMenu] = useState(false)
   const [showArquivoSub, setShowArquivoSub] = useState(false)
   const renameInputRef = useRef<HTMLInputElement>(null)
@@ -54,9 +56,9 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
     if (hasApiKey) {
       void (async () => {
         const ok = await confirmar({
-          titulo: 'Remover a chave de API?',
-          mensagem: 'O app deixa de usar a IA na nuvem. Você pode colar a chave de novo a qualquer momento, ou usar a IA local, que roda no seu PC.',
-          confirmar: 'Remover',
+          titulo: t('topbar.removeKey.title'),
+          mensagem: t('topbar.removeKey.message'),
+          confirmar: t('common.remove'),
           perigo: true,
         })
         if (ok) onRemoveApiKey()
@@ -162,7 +164,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
             data: {
               imagePath: '', tags: [], metadataSource: 'group',
               isPending: false, isError: false, canvasId,
-              isGroup: true, label: n.label ?? 'Grupo',
+              isGroup: true, label: n.label ?? t('canvas.group.defaultLabel'),
             },
           })
         } else {
@@ -233,7 +235,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
   }
 
   const handleNewCanvas = async () => {
-    const name = 'Novo Canvas'
+    const name = t('topbar.newCanvas.name')
     const id = await window.api.createCanvas(name)
     const store = useCanvasStore.getState()
     store.setCanvasList([...store.canvasList, { id, name, updated_at: Date.now() }])
@@ -265,7 +267,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
     const store = useCanvasStore.getState()
     if (store.canvasList.length <= 1) return
 
-    const name = store.canvasList.find(c => c.id === id)?.name ?? 'este canvas'
+    const name = store.canvasList.find(c => c.id === id)?.name ?? t('topbar.deleteCanvas.fallbackName')
 
     const hasNodes = store.currentCanvasId === id
       ? store.nodes.length > 0
@@ -273,9 +275,9 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
 
     if (hasNodes) {
       const confirmed = await confirmar({
-        titulo: `Apagar "${name}"?`,
-        mensagem: 'Todas as imagens e tags deste canvas serão perdidas. Esta ação não pode ser desfeita.',
-        confirmar: 'Apagar',
+        titulo: t('topbar.deleteCanvas.title', { name }),
+        mensagem: t('topbar.deleteCanvas.message'),
+        confirmar: t('common.delete'),
         perigo: true,
       })
       if (!confirmed) return
@@ -324,7 +326,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
             isError: false,
             canvasId: id,
             isGroup: true,
-            label: 'Grupo',
+            label: t('canvas.group.defaultLabel'),
             modelName: n.model_name ?? undefined, // stores saved group color
           },
         })
@@ -420,7 +422,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
                   <svg width="12" height="12" viewBox="0 0 14 14" fill="none" className="shrink-0">
                     <path d="M1 4a1 1 0 011-1h3l1.5 1.5H12a1 1 0 011 1V11a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3"/>
                   </svg>
-                  Arquivo
+                  {t('topbar.menu.file')}
                 </div>
                 <svg width="6" height="10" viewBox="0 0 6 10" fill="none" className="shrink-0 opacity-40">
                   <path d="M1 1l4 4-4 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
@@ -438,7 +440,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
                       <path d="M5 13V8h4v5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
                       <path d="M4 2h6v3H4z" stroke="currentColor" strokeWidth="1.3"/>
                     </svg>
-                    Salvar Canvas
+                    {t('topbar.menu.saveCanvas')}
                   </button>
                   <button
                     onClick={() => { handleSave(); setShowLogoMenu(false); setShowArquivoSub(false) }}
@@ -451,7 +453,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
                       <path d="M4 2h6v3H4z" stroke="currentColor" strokeWidth="1.3"/>
                       <path d="M9 2v3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
                     </svg>
-                    Salvar Canvas Como
+                    {t('topbar.menu.saveCanvasAs')}
                   </button>
                   <button
                     onClick={() => { handleOpen(); setShowLogoMenu(false); setShowArquivoSub(false) }}
@@ -461,7 +463,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
                     <svg width="12" height="12" viewBox="0 0 14 14" fill="none" className="shrink-0">
                       <path d="M1 4a1 1 0 011-1h3l1.5 1.5H12a1 1 0 011 1V11a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3"/>
                     </svg>
-                    Abrir Canvas
+                    {t('topbar.menu.openCanvas')}
                   </button>
                 </div>
               )}
@@ -476,7 +478,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
                 <svg width="12" height="12" viewBox="0 0 14 14" fill="none" className="shrink-0">
                   <path d="M7 1v8M4 4l3-3 3 3M3 13h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
-                On Top
+                {t('topbar.menu.onTop')}
               </div>
               <div className={`relative w-8 h-[18px] rounded-full transition-colors duration-200 shrink-0 ${alwaysOnTop ? 'bg-orange-500' : 'bg-white/[0.12]'}`}>
                 <div className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow-sm transition-all duration-200 ${alwaysOnTop ? 'left-[18px]' : 'left-[2px]'}`} />
@@ -493,7 +495,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
                   <path d="M4 7c0-1.657 1.343-3 3-3s3 1.343 3 3-1.343 3-3 3-3-1.343-3-3z" fill="currentColor" opacity="0.4"/>
                   <line x1="2" y1="2" x2="12" y2="12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" className={sfwMode ? '' : 'hidden'}/>
                 </svg>
-                Modo SFW
+                {t('topbar.menu.sfwMode')}
               </div>
               <div className={`relative w-8 h-[18px] rounded-full transition-colors duration-200 shrink-0 ${sfwMode ? 'bg-orange-500' : 'bg-white/[0.12]'}`}>
                 <div className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow-sm transition-all duration-200 ${sfwMode ? 'left-[18px]' : 'left-[2px]'}`} />
@@ -510,7 +512,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
                   <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.3"/>
                   <path d="M1 7h12M7 1c1.8 1.6 2.8 3.8 2.8 6S8.8 12.4 7 14M7 1C5.2 2.6 4.2 4.8 4.2 7S5.2 12.4 7 14" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/>
                 </svg>
-                Idioma
+                {t('topbar.menu.language')}
               </div>
               <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-white/[0.08] text-white/70 shrink-0">
                 {appLang === 'pt' ? 'PT-BR' : 'EN'}
@@ -525,7 +527,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
                 <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.3"/>
                 <path d="M7 6.5v4M7 4.5v.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
               </svg>
-              Ajuda
+              {t('topbar.menu.help')}
             </button>
             <button
               onClick={() => { window.api.openExternal('mailto:app@refmap.santinello.com.br?subject=Suporte%20REFMAP'); setShowLogoMenu(false) }}
@@ -536,7 +538,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
                 <rect x="1" y="3" width="12" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
                 <path d="M1 4l6 4 6-4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
-              Suporte
+              {t('topbar.menu.support')}
             </button>
             <div className="h-px bg-white/[0.05] mx-3" />
             <button
@@ -547,7 +549,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
               <svg width="12" height="12" viewBox="0 0 14 14" fill="none" className="shrink-0">
                 <path d="M5 2H2a1 1 0 00-1 1v8a1 1 0 001 1h3M9 10l3-3-3-3M6 7h7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
-              Sair
+              {t('topbar.menu.signOut')}
             </button>
           </div>
         )}
@@ -604,7 +606,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
         <button
           onClick={handleNewCanvas}
           className="no-drag-region px-3 h-full text-white/25 hover:text-white/60 hover:bg-white/[0.04] transition-colors text-lg flex items-center border-r border-white/[0.05]"
-          title="Novo canvas"
+          title={t('topbar.newCanvas.tooltip')}
         >
           +
         </button>
@@ -632,10 +634,10 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
           )}
           <span className="text-[11px] text-white/50">
             {hasApiKey
-              ? (apiProviderName ? `API conectada — ${apiProviderName}` : 'API Conectada')
+              ? (apiProviderName ? t('topbar.connection.apiNamed', { provider: apiProviderName }) : t('topbar.connection.api'))
               : localActive
-                ? `IA Local${localModel ? ` · ${localModel}` : ''}`
-                : 'Configure seu Ref Map'}
+                ? `${t('topbar.connection.local')}${localModel ? ` · ${localModel}` : ''}`
+                : t('topbar.connection.none')}
           </span>
         </button>
 

@@ -172,6 +172,81 @@ Sequência recomendada: **1 → 2 → 3 → 5 → 4 → 6 → 7**
 
 ---
 
+## Idioma da Interface (i18n)
+
+O app roda em **português e inglês**. Dicionário próprio, sem biblioteca — são dois
+idiomas e o estado já vive no Zustand.
+
+```
+src/shared/i18n/
+├── en.ts     # BASE — define quais chaves existem (`I18nKey`)
+├── pt.ts     # Record<I18nKey, string> — build QUEBRA se faltar/sobrar chave
+└── index.ts  # translate(), normalizeLang() — puro, sem Zustand nem Electron
+```
+
+Como usar:
+
+| Onde | O que usar |
+|---|---|
+| Corpo de componente React | `const t = useT()` — re-renderiza ao trocar idioma |
+| Handler, `catch`, código imperativo | `import { t } from '../../i18n'` — lê o idioma na hora |
+| Frase com `<span>` no meio | `useTRich('chave', { slot: <span>…</span> })` |
+| Processo main | `tm()` de `src/main/i18n.ts` |
+
+**Nunca** escreva texto visível direto no JSX ou em `message:`. Sempre uma chave.
+
+O idioma vive em `appLang` (Zustand) e na tabela `settings`. Na primeira execução o
+main resolve pelo idioma do SO (`app.getLocale()`) e o renderer lê via
+`window.api.getLang()`. Trocar o idioma avisa o main pelo handler `settings:set`.
+
+### O que NÃO traduzir
+
+É inglês **de propósito** — vocabulário que vai para o modelo de IA:
+
+- `ai/model-prompts.ts` e `ai/visionPrompt.ts` — system prompts das APIs
+- `metadata/categorizer.ts` — listas de keywords de classificação
+- `lib/tagExamples.ts`
+
+Esses arquivos estão na lista `IGNORADOS` de `scripts/check-i18n.ts`.
+
+**Arquivo ignorado inteiro esconde interface.** Foi o que aconteceu com o
+`PromptPresets`: o vocabulário dos presets é inglês por design, mas "Categorias",
+"Todas" e "Meus Presets" eram moldura e passaram batido por semanas. A regra
+passou a ser: só ignore o arquivo inteiro quando ele NÃO tiver JSX. Tendo, marque
+apenas o bloco de dados com `// i18n-ignore-start` / `// i18n-ignore-end` e
+mantenha o arquivo em `MIGRADOS`, para o guard vigiar o resto.
+
+### Ferramentas
+
+```bash
+npm run check:i18n          # relatório: quanto falta migrar, por arquivo
+npm run check:i18n -- --ci  # falha se um arquivo já migrado regrediu
+npm run typecheck           # garante que os dois dicionários batem
+```
+
+Ao terminar a migração de um arquivo, adicione o caminho em `MIGRADOS` no
+`scripts/check-i18n.ts` — a partir daí ele é obrigado a ficar limpo.
+
+### Estado da migração
+
+**Concluída** — 368 chaves, 24 arquivos migrados, `npm run check:i18n` em zero.
+
+O guard roda em modo `--ci` sobre a lista `MIGRADOS`, que hoje cobre todo o
+renderer e todo o main. Arquivo novo com texto de interface: acrescente na lista.
+
+### Pendências conhecidas
+
+- **Termos de Uso** (`src/shared/i18n/terms.ts`) — a versão em inglês é tradução
+  fiel, mas SEM revisão jurídica. O item de reembolso cita a Hotmart e o prazo de
+  7 dias do CDC, que não vale fora do Brasil; também não há cláusula de foro.
+- **Changelog remoto** — o sininho mostra as novidades do `changelog.json` no
+  idioma do app (campo `items_en`, com fallback para `items`). O que continua em
+  português é o corpo da release no GitHub, gerado por `scripts/release-notes.mjs`
+  a partir de `items`. Isso só aparece para quem AINDA não atualizou e a release
+  tem descrição. **Ao publicar uma versão, preencha `items` e `items_en`.**
+- **Categorias de tag** (`CAT_LABEL` no PixiCanvas) — já eram inglês nos dois
+  idiomas antes desta migração. Mantido como estava.
+
 ## Princípios de Desenvolvimento
 
 - **100% local** — nenhum dado enviado a servidores próprios

@@ -1,29 +1,34 @@
 import { useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
+import { useT } from '../../i18n'
+import type { I18nKey } from '../../../shared/i18n'
 
 interface OnboardingProps {
   onComplete: () => void
 }
 
-const STEPS = [
+// STEPS vive fora do componente, então não pode chamar hook — guarda as CHAVES
+// e quem resolve o texto é o render, que já tem o `useT`.
+const STEPS: { titleKey: I18nKey; descKey: I18nKey; illustration: () => React.ReactElement }[] = [
   {
-    title: 'Importe suas referências',
-    description: 'Arraste suas imagens para o Canvas ou clique em +. Suporta PNG, JPG e WEBP.',
+    titleKey: 'onboarding.step1.title',
+    descKey: 'onboarding.step1.desc',
     illustration: IllustrationImport,
   },
   {
-    title: 'Explore os metadados',
-    description: 'Clique em qualquer imagem no canvas para ver todas as informações extraídas: modelo, sampler, steps, seed, LoRAs e muito mais.',
+    titleKey: 'onboarding.step2.title',
+    descKey: 'onboarding.step2.desc',
     illustration: IllustrationClick,
   },
   {
-    title: 'Monte e otimize seu prompt',
-    description: 'Clique nas tags para adicioná-las ao Prompt Builder. Reordene, edite manualmente e use a IA para otimizar o prompt para o modelo que quiser.',
+    titleKey: 'onboarding.step3.title',
+    descKey: 'onboarding.step3.desc',
     illustration: IllustrationPrompt,
   },
 ]
 
 function IllustrationImport() {
+  const t = useT()
   return (
     <svg width="260" height="148" viewBox="0 0 260 148" fill="none">
       {/* Canvas background */}
@@ -34,7 +39,7 @@ function IllustrationImport() {
       {/* + button in place of upload arrow */}
       <rect x="60" y="62" width="46" height="22" rx="6" fill="rgba(251,146,60,0.2)" stroke="rgba(251,146,60,0.4)" strokeWidth="1"/>
       <text x="83" y="77" textAnchor="middle" fill="rgba(251,146,60,0.9)" fontSize="12" fontFamily="system-ui" fontWeight="600">+</text>
-      <text x="83" y="96" textAnchor="middle" fill="rgba(255,255,255,0.2)" fontSize="9" fontFamily="system-ui">arraste aqui</text>
+      <text x="83" y="96" textAnchor="middle" fill="rgba(255,255,255,0.2)" fontSize="9" fontFamily="system-ui">{t('onboarding.illustration.dragHere')}</text>
 
       {/* Image being dragged */}
       <g style={{ filter: 'drop-shadow(0 8px 24px rgba(0,0,0,0.6))' }}>
@@ -42,7 +47,7 @@ function IllustrationImport() {
         <rect x="148" y="28" width="56" height="36" rx="3" fill="rgba(251,146,60,0.2)"/>
         <path d="M148 52l12-10 10 8 8-6 14 10" stroke="rgba(251,146,60,0.6)" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
         <circle cx="158" cy="36" r="4" fill="rgba(251,146,60,0.5)"/>
-        <text x="176" y="72" textAnchor="middle" fill="rgba(251,146,60,0.7)" fontSize="8" fontFamily="system-ui" fontWeight="500">imagem.png</text>
+        <text x="176" y="72" textAnchor="middle" fill="rgba(251,146,60,0.7)" fontSize="8" fontFamily="system-ui" fontWeight="500">{t('onboarding.illustration.fileName')}</text>
       </g>
 
       {/* Arrow */}
@@ -53,6 +58,7 @@ function IllustrationImport() {
 }
 
 function IllustrationClick() {
+  const t = useT()
   return (
     <svg width="260" height="148" viewBox="0 0 260 148" fill="none">
       {/* Canvas background */}
@@ -82,7 +88,7 @@ function IllustrationClick() {
       <rect x="140" y="18" width="108" height="112" rx="8" fill="rgba(0,0,0,0.4)" stroke="rgba(255,255,255,0.07)" strokeWidth="1"/>
       {/* Panel rows */}
       {[
-        { y: 32, label: 'Modelo', value: 'DreamShaper XL', w: 70 },
+        { y: 32, label: t('onboarding.illustration.model'), value: 'DreamShaper XL', w: 70 },
         { y: 56, label: 'Sampler', value: 'DPM++ 2M', w: 52 },
         { y: 80, label: 'Steps', value: '28', w: 20 },
         { y: 104, label: 'Seed', value: '4829301...', w: 48 },
@@ -98,6 +104,7 @@ function IllustrationClick() {
 }
 
 function IllustrationPrompt() {
+  const t = useT()
   return (
     <svg width="260" height="148" viewBox="0 0 260 148" fill="none">
       {/* Canvas background */}
@@ -142,12 +149,13 @@ function IllustrationPrompt() {
       ))}
       {/* Optimize button */}
       <rect x="204" y="128" width="32" height="10" rx="2.5" fill="rgba(168,85,247,0.35)"/>
-      <text x="220" y="135.5" textAnchor="middle" fill="rgba(168,85,247,0.9)" fontSize="6.5" fontFamily="system-ui" fontWeight="600">Otimizar</text>
+      <text x="220" y="135.5" textAnchor="middle" fill="rgba(168,85,247,0.9)" fontSize="6.5" fontFamily="system-ui" fontWeight="600">{t('onboarding.illustration.optimize')}</text>
     </svg>
   )
 }
 
 export default function Onboarding({ onComplete }: OnboardingProps) {
+  const t = useT()
   const [step, setStep] = useState(0)
   const [direction, setDirection] = useState(1)
 
@@ -161,7 +169,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     onComplete()
   }
 
-  const { title, description, illustration: Illustration } = STEPS[step]
+  const { titleKey, descKey, illustration: Illustration } = STEPS[step]
 
   return (
     <div
@@ -219,8 +227,8 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.2, ease: 'easeOut' }}
             >
-              <h2 className="text-[15px] font-semibold text-white mb-2">{title}</h2>
-              <p className="text-[12px] text-white/45 leading-relaxed">{description}</p>
+              <h2 className="text-[15px] font-semibold text-white mb-2">{t(titleKey)}</h2>
+              <p className="text-[12px] text-white/45 leading-relaxed">{t(descKey)}</p>
             </motion.div>
           </AnimatePresence>
         </div>
@@ -231,7 +239,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
             onClick={() => step > 0 ? goTo(step - 1) : handleComplete()}
             className="text-[12px] text-white/30 hover:text-white/60 transition-colors"
           >
-            {step === 0 ? 'Pular' : '← Anterior'}
+            {step === 0 ? t('onboarding.skip') : t('onboarding.previous')}
           </button>
 
           {step < STEPS.length - 1 ? (
@@ -239,14 +247,14 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
               onClick={() => goTo(step + 1)}
               className="px-5 py-2 bg-orange-500/80 hover:bg-orange-500 text-white rounded-lg text-[12px] font-medium transition-colors"
             >
-              Próximo →
+              {t('onboarding.next')}
             </button>
           ) : (
             <button
               onClick={handleComplete}
               className="px-5 py-2 bg-orange-500/80 hover:bg-orange-500 text-white rounded-lg text-[12px] font-medium transition-colors"
             >
-              Começar →
+              {t('onboarding.start')}
             </button>
           )}
         </div>

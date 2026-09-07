@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import type { LocalInstallProgress } from '../LocalInstallBanner'
 import { friendlyError } from '../../lib/friendlyError'
 import { confirmar } from '../ConfirmDialog'
+import { useT, useTRich } from '../../i18n'
 
 type View = 'choose' | 'api' | 'local'
 
@@ -15,6 +16,8 @@ interface SettingsProps {
 }
 
 export default function Settings({ onClose, onKeySaved, initialView, installProgress, onInstallLocal, onUninstallLocal }: SettingsProps) {
+  const t = useT()
+  const tRich = useTRich()
   const [view, setView] = useState<View>(initialView ?? 'choose')
   const [provider, setProvider] = useState<'anthropic' | 'openai' | 'together'>('anthropic')
   const [apiKey, setApiKey] = useState('')
@@ -56,9 +59,9 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
 
   const handleUninstall = async () => {
     const ok = await confirmar({
-      titulo: 'Desinstalar a IA local?',
-      mensagem: 'O Ollama será removido do seu computador. A análise de imagens e a otimização de prompts passam a exigir uma chave de API até você instalar de novo.',
-      confirmar: 'Desinstalar',
+      titulo: t('settings.local.uninstall.title'),
+      mensagem: t('settings.local.uninstall.message'),
+      confirmar: t('settings.local.uninstall.confirm'),
       perigo: true,
     })
     if (!ok) return
@@ -79,7 +82,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
     setApiKey(key ?? '')
   }
 
-  const title = view === 'choose' ? 'Como você deseja usar o app?' : view === 'api' ? 'Conectar API' : 'IA Local'
+  const title = view === 'choose' ? t('settings.title.choose') : view === 'api' ? t('settings.title.api') : t('settings.title.local')
 
   return (
     <div
@@ -122,7 +125,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
               <button
                 onClick={() => setView('choose')}
                 className="w-6 h-6 flex items-center justify-center text-white/40 hover:text-white/80 transition-colors rounded-md hover:bg-white/[0.06]"
-                title="Voltar"
+                title={t('common.back')}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M15 18l-6-6 6-6"/>
@@ -150,7 +153,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                 // Nunca mostramos o erro cru ("spawn EBUSY"): o tradutor devolve
                 // o que aconteceu e o que o usuário pode fazer. O texto técnico
                 // fica no title, para suporte.
-                const f = friendlyError(installProgress.error, 'Não foi possível instalar a IA local.')
+                const f = friendlyError(installProgress.error, t('settings.local.installFailed'))
                 return (
                   <div className="rounded-lg p-2.5" title={f.technical} style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.22)' }}>
                     <p className="text-[11px] text-red-400/90">{f.message}</p>
@@ -163,7 +166,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                         style={{ border: '1px solid rgba(255,255,255,0.12)' }}
                         className="mt-2 px-2 py-1 rounded-md text-[11px] text-white/60 hover:text-white/90 hover:bg-white/[0.08] transition-colors"
                       >
-                        Tentar de novo
+                        {t('common.retry')}
                       </button>
                     )}
                   </div>
@@ -172,7 +175,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
             ) : (
               <div className="rounded-lg p-2.5" style={{ background: 'rgba(249,115,22,0.08)', border: '1px solid rgba(249,115,22,0.18)' }}>
                 <div className="flex items-center justify-between text-[11px] mb-1">
-                  <span className="text-white/60 truncate">{installProgress.phase === 'uninstalling' ? installProgress.message : `Instalando IA Local · ${installProgress.message}`}</span>
+                  <span className="text-white/60 truncate">{installProgress.phase === 'uninstalling' ? installProgress.message : t('settings.local.installing', { message: installProgress.message })}</span>
                   {installProgress.percent >= 0 && <span className="text-white/40 shrink-0 ml-2">{installProgress.percent}%</span>}
                 </div>
                 <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.08)' }}>
@@ -189,7 +192,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
         {/* ── Tela de escolha ─────────────────────────────────────────────── */}
         {view === 'choose' && (
           <div style={{ padding: '4px 15px 18px' }}>
-            <p className="text-[12px] text-white/30 mb-4">Escolha como a IA vai gerar tags e otimizar prompts. Dá pra mudar depois aqui mesmo.</p>
+            <p className="text-[12px] text-white/30 mb-4">{t('settings.choose.subtitle')}</p>
             <div className="grid grid-cols-2 gap-3">
               {/* Local */}
               <button
@@ -201,9 +204,9 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                     <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
                   </svg>
                 </div>
-                <span className="text-[13px] font-semibold text-white/90">Usar Local</span>
-                <span className="text-[11px] text-emerald-400/70 mt-0.5">Sem custo, mas mais lento</span>
-                <span className="text-[10.5px] text-white/25 mt-1.5 leading-snug">Roda no seu PC via Ollama. Inclui transcrição de voz. 100% offline.</span>
+                <span className="text-[13px] font-semibold text-white/90">{t('settings.choose.local.name')}</span>
+                <span className="text-[11px] text-emerald-400/70 mt-0.5">{t('settings.choose.local.price')}</span>
+                <span className="text-[10.5px] text-white/25 mt-1.5 leading-snug">{t('settings.choose.local.desc')}</span>
               </button>
 
               {/* API */}
@@ -216,9 +219,9 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                     <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>
                   </svg>
                 </div>
-                <span className="text-[13px] font-semibold text-white/90">Usar via API</span>
-                <span className="text-[11px] text-orange-400/80 mt-0.5">Mais rápido, com custo</span>
-                <span className="text-[10.5px] text-white/25 mt-1.5 leading-snug">Quase de graça. Anthropic, OpenAI ou Together.</span>
+                <span className="text-[13px] font-semibold text-white/90">{t('settings.choose.api.name')}</span>
+                <span className="text-[11px] text-orange-400/80 mt-0.5">{t('settings.choose.api.price')}</span>
+                <span className="text-[10.5px] text-white/25 mt-1.5 leading-snug">{t('settings.choose.api.desc')}</span>
               </button>
             </div>
           </div>
@@ -233,7 +236,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                 <div className="flex items-stretch gap-0">
                   {/* Grupo Padrão */}
                   <div className="flex flex-col gap-1.5 flex-1 min-w-0">
-                    <span className="text-[9px] text-white/30 uppercase tracking-widest font-medium text-center">Padrão</span>
+                    <span className="text-[9px] text-white/30 uppercase tracking-widest font-medium text-center">{t('settings.api.groupDefault')}</span>
                     <div className="flex gap-1.5">
                       {(['anthropic', 'openai'] as const).map(p => (
                         <button
@@ -272,7 +275,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
 
                   {/* Grupo NSFW */}
                   <div className="flex flex-col gap-1.5" style={{ width: '30%' }}>
-                    <span className="text-[9px] text-white/30 uppercase tracking-widest font-medium text-center">NSFW +18</span>
+                    <span className="text-[9px] text-white/30 uppercase tracking-widest font-medium text-center">{t('settings.api.groupNsfw')}</span>
                     <button
                       onClick={() => handleProviderChange('together')}
                       style={{ paddingTop: '8px', paddingBottom: '8px' }}
@@ -294,10 +297,10 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
 
                 <p className="text-[12px] text-white/25 mt-2" style={{ marginBottom: '2px' }}>
                   {provider === 'anthropic'
-                    ? 'claude-haiku-4-5 — Rápido e econômico'
+                    ? t('settings.api.desc.anthropic')
                     : provider === 'openai'
-                      ? 'gpt-4o-mini — Rápido e econômico · Aceita transcrição por voz'
-                      : 'Llama 3.3 70B — sem censura, prompts NSFW'}
+                      ? t('settings.api.desc.openai')
+                      : t('settings.api.desc.together')}
                 </p>
               </div>
 
@@ -305,7 +308,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
               <div>
                 <div className="flex items-center gap-1.5 mb-2.5">
                   <label className="text-[11px] text-white/60 uppercase tracking-widest font-medium">
-                    Chave
+                    {t('settings.api.keyLabel')}
                   </label>
                   <div className="relative">
                     <button
@@ -328,7 +331,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                         }}
                         className="absolute left-full top-1/2 -translate-y-1/2 ml-2 px-3 py-2 rounded-lg text-xs font-medium bg-white/[0.10] text-white/90 hover:bg-white/[0.14] hover:text-white transition-all whitespace-nowrap z-10"
                       >
-                        Gere sua API Key →
+                        {t('settings.api.getKey')}
                       </button>
                     )}
                   </div>
@@ -364,7 +367,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                   <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="1.5 6 4.5 9 10.5 3"/>
                   </svg>
-                  Sua chave é salva localmente com criptografia de ponta a ponta.
+                  {t('settings.api.keyStored')}
                 </p>
               </div>
             </div>
@@ -383,14 +386,14 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                       : 'bg-white/[0.03] text-white/20 cursor-not-allowed'
                 }`}
               >
-                {saved ? '✓ Salvo' : 'Salvar'}
+                {saved ? t('common.saved') : t('common.save')}
               </button>
               <button
                 onClick={handleClose}
                 style={{ paddingTop: '10px', paddingBottom: '10px' }}
                 className="px-4 rounded-lg text-sm text-white/35 hover:text-white/65 hover:bg-white/[0.05] transition-all"
               >
-                Cancelar
+                {t('common.cancel')}
               </button>
             </div>
           </>
@@ -401,36 +404,39 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
           <div style={{ padding: '4px 15px 18px' }}>
             <div className="rounded-lg p-3.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
               <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[11px] text-white/60 uppercase tracking-widest font-medium">Status</span>
+                <span className="text-[11px] text-white/60 uppercase tracking-widest font-medium">{t('common.status')}</span>
                 <span className="flex items-center gap-1.5 text-[11px]">
                   <span
                     className="w-1.5 h-1.5 rounded-full"
                     style={{ background: localStatus === 'ok' ? '#34D399' : localStatus === 'off' ? '#f87171' : 'rgba(255,255,255,0.3)' }}
                   />
                   <span className={localStatus === 'ok' ? 'text-emerald-400/80' : localStatus === 'off' ? 'text-red-400/70' : 'text-white/40'}>
-                    {localStatus === 'checking' ? 'Verificando…' : localStatus === 'ok' ? 'Pronto' : 'Não instalado'}
+                    {localStatus === 'checking' ? t('settings.local.checking') : localStatus === 'ok' ? t('settings.local.ready') : t('settings.local.notInstalled')}
                   </span>
                 </span>
               </div>
               <p className="text-[11px] text-white/30 leading-relaxed">
-                O download instala <span className="text-white/50">três modelos</span> que rodam no seu PC, <span className="text-emerald-400/70">offline e sem custo</span>, usados automaticamente quando não houver uma API conectada:
+                {tRich('settings.local.intro', {
+                  models: <span className="text-white/50">{t('settings.local.intro.models')}</span>,
+                  free: <span className="text-emerald-400/70">{t('settings.local.intro.free')}</span>,
+                })}
               </p>
               <ul className="mt-2 space-y-1.5 text-[11px] text-white/30 leading-relaxed">
                 <li className="flex gap-1.5">
                   <span className="text-orange-400/60 shrink-0">•</span>
-                  <span><span className="text-white/50">Gemma 3 4B</span> — analisa imagens e gera as tags.</span>
+                  <span><span className="text-white/50">Gemma 3 4B</span> {t('settings.local.model.vision')}</span>
                 </li>
                 <li className="flex gap-1.5">
                   <span className="text-orange-400/60 shrink-0">•</span>
-                  <span><span className="text-white/50">Dolphin Mistral</span> (sem censura) — otimiza prompts, permite +18.</span>
+                  <span><span className="text-white/50">Dolphin Mistral</span> {t('settings.local.model.text')}</span>
                 </li>
                 <li className="flex gap-1.5">
                   <span className="text-orange-400/60 shrink-0">•</span>
-                  <span><span className="text-white/50">Whisper</span> — transcrição de voz (ditado pelo microfone).</span>
+                  <span><span className="text-white/50">Whisper</span> {t('settings.local.model.voice')}</span>
                 </li>
               </ul>
               {installProgress && installProgress.phase !== 'error' && installProgress.phase !== 'done' && installProgress.phase !== 'uninstalling' && (
-                <p className="text-[10px] text-white/20 mt-2.5">O download (~3,3GB de visão + ~4GB de texto + ~250MB de voz) pode demorar. Pode fechar esta janela — o progresso continua no topo.</p>
+                <p className="text-[10px] text-white/20 mt-2.5">{t('settings.local.downloadWarn')}</p>
               )}
             </div>
 
@@ -439,14 +445,14 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
               <>
                 <p className="flex items-center gap-1.5 text-[12px] text-emerald-400/70 mt-3">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-                  Tudo pronto — a IA local já está funcionando.
+                  {t('settings.local.allSet')}
                 </p>
                 <button
                   onClick={handleUninstall}
                   className="mt-3 w-full py-2 rounded-lg text-[12px] font-medium transition-all hover:brightness-110"
                   style={{ color: 'rgba(248,113,113,0.85)', background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.22)' }}
                 >
-                  Desinstalar Ollama
+                  {t('settings.local.uninstall')}
                 </button>
               </>
             ) : (localStatus !== 'ok' && (!installProgress || installProgress.phase === 'error')) && (
@@ -455,7 +461,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                 className="mt-3 w-full py-2.5 rounded-lg text-[13px] font-medium text-white transition-all hover:brightness-110"
                 style={{ background: 'linear-gradient(135deg, #8f0e2e, #F97316)' }}
               >
-                {installProgress?.phase === 'error' ? 'Tentar de novo' : 'Baixar IA Local: texto + voz · grátis'}
+                {installProgress?.phase === 'error' ? t('common.retry') : t('settings.local.download')}
               </button>
             )}
           </div>

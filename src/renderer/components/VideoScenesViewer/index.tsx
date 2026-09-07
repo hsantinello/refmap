@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useT } from '../../i18n'
 
 // Visualizador das cenas de um nó de vídeo. Mostra todas as cenas em grade; o usuário
 // pode selecionar e adicionar cenas específicas ao canvas como imagens separadas.
@@ -10,6 +11,7 @@ export default function VideoScenesViewer({
   onAdd: (paths: string[]) => void
   onClose: () => void
 }) {
+  const t = useT()
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const toggle = (i: number) => setSelected(s => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n })
   const selectedPaths = [...selected].sort((a, b) => a - b).map(i => scenes[i])
@@ -32,8 +34,8 @@ export default function VideoScenesViewer({
               <rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/>
             </svg>
             <div className="min-w-0">
-              <div className="text-[13px] font-semibold text-white/85 truncate">Cenas do vídeo</div>
-              <div className="text-[11px] text-white/35 truncate">{videoName ? `${videoName} · ` : ''}{scenes.length} cena{scenes.length === 1 ? '' : 's'}</div>
+              <div className="text-[13px] font-semibold text-white/85 truncate">{t('video.scenes.title')}</div>
+              <div className="text-[11px] text-white/35 truncate">{videoName ? `${videoName} · ` : ''}{t(scenes.length === 1 ? 'video.scenes.count.one' : 'video.scenes.count.other', { count: scenes.length })}</div>
             </div>
           </div>
           <button onClick={onClose} className="text-white/30 hover:text-white/60 transition-colors text-lg shrink-0 cursor-pointer">✕</button>
@@ -41,9 +43,9 @@ export default function VideoScenesViewer({
 
         {/* Controles */}
         <div className="flex items-center justify-end gap-2 px-5 py-2.5 border-b border-white/[0.06] text-[11px] text-white/40">
-          <button onClick={() => setSelected(new Set(scenes.map((_, i) => i)))} className="hover:text-white/70 transition-colors cursor-pointer">Todas</button>
+          <button onClick={() => setSelected(new Set(scenes.map((_, i) => i)))} className="hover:text-white/70 transition-colors cursor-pointer">{t('common.all')}</button>
           <span className="text-white/15">·</span>
-          <button onClick={() => setSelected(new Set())} className="hover:text-white/70 transition-colors cursor-pointer">Nenhuma</button>
+          <button onClick={() => setSelected(new Set())} className="hover:text-white/70 transition-colors cursor-pointer">{t('common.none')}</button>
         </div>
 
         {/* Grade */}
@@ -68,16 +70,16 @@ export default function VideoScenesViewer({
 
         {/* Footer */}
         <div className="flex items-center justify-between px-5 py-3.5 border-t border-white/[0.06]">
-          <div className="text-[11px] text-white/40">{selected.size} selecionada{selected.size === 1 ? '' : 's'}</div>
+          <div className="text-[11px] text-white/40">{t(selected.size === 1 ? 'video.scenes.selected.one' : 'video.scenes.selected.other', { count: selected.size })}</div>
           <div className="flex items-center gap-2">
-            <button onClick={onClose} className="px-3.5 py-2 rounded-xl text-[12px] text-white/50 hover:text-white/80 transition-colors cursor-pointer">Fechar</button>
+            <button onClick={onClose} className="px-3.5 py-2 rounded-xl text-[12px] text-white/50 hover:text-white/80 transition-colors cursor-pointer">{t('common.close')}</button>
             <button
               disabled={selected.size === 0}
               onClick={() => { onAdd(selectedPaths); onClose() }}
               className="px-4 py-2 rounded-xl text-[12px] font-medium text-white transition-opacity disabled:opacity-40 cursor-pointer"
               style={{ background: 'linear-gradient(135deg, #8f0e2e, #F97316)' }}
             >
-              Adicionar {selected.size || ''} ao canvas
+              {t('video.scenes.addToCanvas', { count: selected.size || '' })}
             </button>
           </div>
         </div>

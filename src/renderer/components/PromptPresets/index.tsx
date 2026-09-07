@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { usePromptStore, useCanvasStore } from '../../store'
 import { useMyPresets } from '../../hooks/useMyPresets'
+import { useT } from '../../i18n'
 
 // Imagens de exemplo das categorias (boneco 3D neutro). O glob resolve cada asset em
 // URL no bundle (arquivo ou data-URI inline, conforme o tamanho); adicionar novas
@@ -17,6 +18,9 @@ const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').repla
 // Retorna a imagem de exemplo de uma tag (chave = nome EM INGLÊS), se existir.
 const tagImage = (item: string): string | undefined => EXAMPLE_BY_SLUG[slugify(item)]
 
+// i18n-ignore-start — daqui até o fim do GROUP_PT é DADO, não interface:
+// vocabulário de prompt (inglês de propósito, vai para o modelo) e o mapa de
+// tradução dos nomes de grupo, que o botão PT-BR usa em runtime.
 // Categoria Cores: preview é só o swatch da cor (sem imagem). Mapa nome → hex.
 const COLOR_HEX: Record<string, string> = {
   'Almond Color': '#EFDECD', 'Amber': '#FFBF00', 'Apricot Orange': '#FBCEB1', 'Ash Gray': '#B2BEB5',
@@ -90,6 +94,10 @@ const PRESETS: { group: string; items: string[] }[] = [
   },
 ]
 
+// ID interno do grupo "Meus Presets". É comparado em vários pontos e persiste em
+// estado, então o VALOR não muda com o idioma — quem traduz é o `dispGroup`.
+const GRUPO_MEUS = 'Meus Presets'
+
 const GROUP_PT: Record<string, string> = {
   'Angle of View': 'Ângulo de Visão',
   'Artists': 'Artistas',
@@ -104,8 +112,10 @@ const GROUP_PT: Record<string, string> = {
   'Shot': 'Tomada',
   'Style': 'Estilo',
 }
+// i18n-ignore-end
 
 export default function PromptPresets() {
+  const t = useT()
   const [open, setOpen] = useState(false)
   const [activeGroup, setActiveGroup] = useState<string | null>(null)
   const [showCategories, setShowCategories] = useState(false)
@@ -169,7 +179,7 @@ export default function PromptPresets() {
   }
 
   const allItems = PRESETS.flatMap(g => g.items)
-  const currentItems = activeGroup === 'Meus Presets'
+  const currentItems = activeGroup === GRUPO_MEUS
     ? myPresets
     : activeGroup
       ? (PRESETS.find(g => g.group === activeGroup)?.items ?? [])
@@ -177,7 +187,11 @@ export default function PromptPresets() {
 
   // Texto exibido para um item / nome de grupo conforme o idioma ativo.
   const disp = (item: string) => translated ? (transMap[item] ?? item) : item
-  const dispGroup = (g: string) => translated ? (GROUP_PT[g] ?? g) : g
+  // 'Meus Presets' é o ID interno do grupo (comparado em vários pontos e não
+  // pode mudar); aqui ele vira rótulo traduzido. Os demais grupos têm nome em
+  // inglês e caem no GROUP_PT — que segue o botão PT-BR/EN, não o idioma do app.
+  const dispGroup = (g: string) =>
+    g === GRUPO_MEUS ? t('presets.mine') : translated ? (GROUP_PT[g] ?? g) : g
 
   // Carrega o cache de traduções salvo em disco (presets são fixos, então a
   // tradução é estável e não precisa ser refeita entre reinícios do app).
@@ -190,7 +204,7 @@ export default function PromptPresets() {
   // Quando a tradução está ativa, garante que os itens do grupo atual estejam
   // traduzidos (em lotes, com cache). Presets do usuário não são traduzidos.
   useEffect(() => {
-    if (!translated || activeGroup === 'Meus Presets') return
+    if (!translated || activeGroup === GRUPO_MEUS) return
     const missing = currentItems.filter(i => !(i in transMap))
     if (missing.length === 0) return
     let cancelled = false
@@ -230,7 +244,7 @@ export default function PromptPresets() {
     <div ref={containerRef}>
       <button
         onClick={() => { setOpen(v => !v); setActiveGroup(null); setSearch(''); setShowCategories(false) }}
-        title="Presets de prompt"
+        title={t('presets.tooltip')}
         className={`
           absolute top-3 left-[300px] z-40
           w-9 h-9 flex items-center justify-center rounded-xl
@@ -266,15 +280,18 @@ export default function PromptPresets() {
                 onClick={() => setShowCategories(v => !v)}
                 className="flex-1 flex items-center justify-between px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.07] hover:bg-white/[0.07] transition-colors"
               >
-                <span className="text-[11px] font-semibold text-orange-400/80">{activeGroup ? dispGroup(activeGroup) : 'Categorias'}</span>
+                <span className="text-[11px] font-semibold text-orange-400/80">{activeGroup ? dispGroup(activeGroup) : t('presets.categories')}</span>
                 <svg width="10" height="10" viewBox="0 0 10 6" fill="none">
                   <path d={showCategories ? 'M1 5L5 1L9 5' : 'M1 1L5 5L9 1'} stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </button>
+              {/* Traduzir presets só faz sentido lendo em português: o vocabulário
+                  é inglês por design, porque é ele que vai para o modelo. */}
+              {appLang === 'pt' && (
               <button
                 onClick={() => setTranslated(v => !v)}
                 disabled={translating}
-                title={translating ? 'Traduzindo...' : translated ? 'Voltar para inglês' : 'Traduzir para português'}
+                title={translating ? t('presets.translating') : translated ? t('presets.translate.revert') : t('presets.translate.to')}
                 className={`text-[11px] px-2 py-2 rounded-lg border transition-colors shrink-0 inline-flex items-center gap-1 ${
                   translating
                     ? 'text-white/30 border-white/[0.07] cursor-default bg-white/[0.04]'
@@ -291,6 +308,7 @@ export default function PromptPresets() {
                 )}
                 <span>{translated ? 'EN' : 'PT-BR'}</span>
               </button>
+              )}
             </div>
             {showCategories && (
               <div className="absolute left-2 right-2 top-full mt-1 z-50 rounded-xl border border-white/[0.1] overflow-y-auto" style={{ maxHeight: '220px', background: 'rgba(22, 20, 18, 0.85)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)', boxShadow: '0 12px 32px rgba(0,0,0,0.6)' }} data-scrollable>
@@ -300,16 +318,16 @@ export default function PromptPresets() {
                     activeGroup === null ? 'text-orange-400/90 bg-orange-500/10' : 'text-white/50 hover:text-white/80 hover:bg-white/[0.05]'
                   }`}
                 >
-                  Todas
+                  {t('presets.all')}
                 </button>
                 {myPresets.length > 0 && (
                   <button
-                    onClick={() => { setActiveGroup('Meus Presets'); setSearch(''); setShowCategories(false) }}
+                    onClick={() => { setActiveGroup(GRUPO_MEUS); setSearch(''); setShowCategories(false) }}
                     className={`w-full text-left px-3 py-2 text-[11px] transition-colors border-b border-white/[0.05] ${
-                      activeGroup === 'Meus Presets' ? 'text-orange-400/90 bg-orange-500/10' : 'text-orange-400/70 hover:text-orange-400 hover:bg-orange-500/[0.08]'
+                      activeGroup === GRUPO_MEUS ? 'text-orange-400/90 bg-orange-500/10' : 'text-orange-400/70 hover:text-orange-400 hover:bg-orange-500/[0.08]'
                     }`}
                   >
-                    ★ Meus Presets
+                    {t('presets.mineStarred')}
                   </button>
                 )}
                 {PRESETS.map(g => (
@@ -335,7 +353,7 @@ export default function PromptPresets() {
               value={search}
               onChange={e => setSearch(e.target.value)}
               onKeyDown={e => e.stopPropagation()}
-              placeholder="Filtrar..."
+              placeholder={t('presets.filter')}
               className="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-3 py-1.5 text-[11px] text-white/60 placeholder-white/20 outline-none focus:border-orange-500/30"
             />
           </div>
@@ -343,7 +361,7 @@ export default function PromptPresets() {
           {/* Items */}
           <div className="overflow-y-auto p-1 flex flex-col gap-0.5" data-scrollable>
             {filtered.map(item => (
-              activeGroup === 'Meus Presets' && editingItem === item ? (
+              activeGroup === GRUPO_MEUS && editingItem === item ? (
                 <div key={item} className="flex items-center gap-1 px-2 py-1">
                   <input
                     autoFocus
@@ -372,20 +390,20 @@ export default function PromptPresets() {
                     {disp(item)}
                   </button>
                   {tagColor(item) ? (
-                    <span className="shrink-0 mr-1.5 w-3 h-3 rounded-full ring-1 ring-white/20" style={{ backgroundColor: tagColor(item) }} title="Cor" />
+                    <span className="shrink-0 mr-1.5 w-3 h-3 rounded-full ring-1 ring-white/20" style={{ backgroundColor: tagColor(item) }} title={t('presets.color')} />
                   ) : tagImage(item) ? (
-                    <span className="shrink-0 mr-1 text-white/20 group-hover:text-orange-400/70 transition-colors" title="Passe o mouse para ver um exemplo">
+                    <span className="shrink-0 mr-1 text-white/20 group-hover:text-orange-400/70 transition-colors" title={t('presets.previewTooltip')}>
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
                       </svg>
                     </span>
                   ) : null}
-                  {activeGroup === 'Meus Presets' && (
+                  {activeGroup === GRUPO_MEUS && (
                     <>
                       <button
                         onClick={() => { setEditingItem(item); setEditValue(item) }}
                         className="opacity-0 group-hover:opacity-100 w-6 h-6 flex items-center justify-center rounded-md hover:bg-white/[0.08] transition-all text-white/30 hover:text-white/60 shrink-0"
-                        title="Editar"
+                        title={t('presets.edit')}
                       >
                         <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
                           <path d="M8.5 1.5l2 2L4 10H2v-2L8.5 1.5z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
@@ -394,7 +412,7 @@ export default function PromptPresets() {
                       <button
                         onClick={() => removePreset(item)}
                         className="opacity-0 group-hover:opacity-100 w-6 h-6 flex items-center justify-center rounded-md hover:bg-red-500/15 transition-all text-white/30 hover:text-red-400 shrink-0"
-                        title="Remover"
+                        title={t('presets.remove')}
                       >
                         <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
                           <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
@@ -406,7 +424,7 @@ export default function PromptPresets() {
               )
             ))}
             {filtered.length === 0 && (
-              <p className="text-center text-[11px] text-white/20 py-4">Nenhum resultado</p>
+              <p className="text-center text-[11px] text-white/20 py-4">{t('presets.noResults')}</p>
             )}
           </div>
         </div>
@@ -414,7 +432,7 @@ export default function PromptPresets() {
       {savedFeedback && (
         <div className="absolute top-[52px] left-[300px] z-50 px-3 py-2 rounded-xl rm-panel !border-transparent text-[11px] whitespace-nowrap"
           style={{ color: '#F97316', borderColor: 'rgba(249,115,22,0.2)', background: 'rgba(249,115,22,0.08)' }}>
-          ★ Salvo em Meus Presets
+          {t('presets.savedToMine')}
         </div>
       )}
 

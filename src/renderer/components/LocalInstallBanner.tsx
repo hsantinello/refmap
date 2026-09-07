@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import { friendlyError } from '../lib/friendlyError'
+import { useT } from '../i18n'
 
 export interface LocalInstallProgress {
   phase: string
@@ -11,12 +12,13 @@ export interface LocalInstallProgress {
 // Barra fina no topo que mostra o progresso do download/instalação da IA local.
 // Fica no App (sempre montado), então persiste mesmo com as Settings fechadas.
 export default function LocalInstallBanner({ progress, onRetry }: { progress: LocalInstallProgress; onRetry?: () => void }) {
+  const t = useT()
   const { phase, percent, message, error } = progress
   const isError = phase === 'error'
   const isDone = phase === 'done'
   // A pílula é estreita e trunca: mostramos só a frase do "o que houve" e
   // deixamos a solução + o texto técnico no tooltip.
-  const friendly = isError ? friendlyError(error, 'Não foi possível instalar a IA local.') : null
+  const friendly = isError ? friendlyError(error, t('settings.local.installFailed')) : null
 
   return (
     <motion.div
@@ -39,8 +41,8 @@ export default function LocalInstallBanner({ progress, onRetry }: { progress: Lo
         {isError
           ? friendly!.message
           : isDone
-            ? 'IA local pronta!'
-            : <>IA Local · <span className="text-white/50">{message}</span></>}
+            ? t('main.install.ready')
+            : <>{t('banner.local.prefix')} <span className="text-white/50">{message}</span></>}
       </span>
 
       {!isError && !isDone && (
@@ -63,7 +65,7 @@ export default function LocalInstallBanner({ progress, onRetry }: { progress: Lo
           onClick={onRetry}
           className="shrink-0 whitespace-nowrap px-2 py-0.5 rounded-full text-[11px] text-white/60 hover:text-white/90 bg-white/[0.08] hover:bg-white/[0.16] transition-colors"
         >
-          Tentar de novo
+          {t('common.retry')}
         </button>
       )}
 

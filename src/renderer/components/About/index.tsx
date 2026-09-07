@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import logoUrl from '../../assets/logo.png'
+import { useT } from '../../i18n'
 
 interface AboutProps {
   onClose: () => void
 }
 
 export default function About({ onClose }: AboutProps) {
+  const t = useT()
   const [version, setVersion] = useState('...')
   const [closing, setClosing] = useState(false)
 
@@ -49,7 +51,7 @@ export default function About({ onClose }: AboutProps) {
 
         <div className="space-y-4" style={{ padding: '6px 15px 15px' }}>
           <p className="text-white/40 text-[12px] leading-relaxed">
-            Canvas de referências para criadores de conteúdo com IA. Extraia metadados, gere tags e componha prompts melhores.
+            {t('about.description')}
           </p>
 
         </div>
@@ -60,7 +62,7 @@ export default function About({ onClose }: AboutProps) {
             style={{ paddingTop: '10px', paddingBottom: '10px' }}
             className="w-full rounded-lg text-sm text-white/35 hover:text-white/65 hover:bg-white/[0.05] transition-all"
           >
-            Fechar
+            {t('common.close')}
           </button>
         </div>
       </div>

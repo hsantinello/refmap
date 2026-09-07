@@ -3,6 +3,7 @@ import { join } from 'path'
 import { initDb } from './db'
 import { registerHandlers } from './ipc/handlers'
 import { initUpdater } from './updater'
+import { initMainLang } from './i18n'
 
 let win: BrowserWindow | null = null
 
@@ -52,6 +53,9 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   initDb()
+  // Depende do banco (lê a setting 'appLang') e precisa vir antes de qualquer
+  // string do main ir para a tela — o diálogo do updater, por exemplo.
+  initMainLang()
   createWindow()
   if (win) {
     registerHandlers(win)

@@ -1,6 +1,9 @@
 import { create } from 'zustand'
 import { type Node, type Edge, type XYPosition } from '@xyflow/react'
 import { v4 as uuid } from 'uuid'
+// Importa do módulo compartilhado, e não de `../i18n` — este arquivo é
+// importado POR lá, e a volta fecharia um ciclo.
+import { normalizeLang, translate } from '../../shared/i18n'
 
 export interface Tag {
   id: string
@@ -117,7 +120,11 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   currentCanvasId: null,
   canvasList: [],
   sfwMode: false,
-  appLang: 'en',
+  // Palpite síncrono pelo idioma do navegador (que no Electron é o do sistema).
+  // O App corrige logo em seguida com o valor autoritativo do main, que leva a
+  // escolha salva em conta. Sem este palpite, a tela de login — que aparece
+  // ANTES do IPC responder — piscava em inglês num Windows em português.
+  appLang: normalizeLang(typeof navigator !== 'undefined' ? navigator.language : 'en'),
 
   setNodes: (nodes) => set({ nodes }),
   setEdges: (edges) => set({ edges }),
@@ -160,7 +167,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
         isError: false,
         canvasId,
         isGroup: true,
-        label: 'Grupo',
+        label: translate(get().appLang, 'canvas.group.defaultLabel'),
       },
     }
     set(state => ({ nodes: [node, ...state.nodes] }))

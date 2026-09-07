@@ -1,5 +1,25 @@
 [
   {
+    "version": "0.0.29",
+    "date": "2026-09-07",
+    "items": [
+      "O app agora fala inglês. A interface inteira troca de idioma pelo menu da logo, e na primeira vez que você abre ele já vem no idioma do seu computador.",
+      "Prompts do Midjourney reescritos: saem em uma linha só (era isso que o Midjourney recusava), mais descritivos, e sem aquele monte de parâmetro com --.",
+      "Tab no campo do prompt abre a lista de modelos; as setas escolhem e o Enter otimiza, sem tirar as mãos do teclado.",
+      "Botão direito no histórico voltou a restaurar o texto que gerou o prompt — copiar um prompt otimizado apagava a origem dele.",
+      "O ditado por voz assumia sempre português. Agora transcreve no idioma do app.",
+      "Na tela de entrada, o aviso de código reenviado aparecia em vermelho como se fosse erro."
+    ],
+    "items_en": [
+      "The app speaks English now. The whole interface switches language from the logo menu, and the first time you open it, it already comes up in your computer's language.",
+      "Midjourney prompts rewritten: one single line (that was what Midjourney kept rejecting), more descriptive, and without the pile of -- parameters.",
+      "Tab in the prompt field opens the model list; the arrows pick one and Enter optimizes, without leaving the keyboard.",
+      "Right-click in the history restores the text that generated the prompt again — copying an optimized prompt used to erase where it came from.",
+      "Voice dictation always assumed Portuguese. It now transcribes in the app's language.",
+      "On the sign-in screen, the \"code resent\" notice showed in red as if it were an error."
+    ]
+  },
+  {
     "version": "0.0.28",
     "date": "2026-08-26",
     "items": [
@@ -10,6 +30,15 @@
       "As confirmações deixaram de usar a caixa cinza do Windows e agora seguem o visual do app.",
       "Erros passaram a oferecer o caminho de volta: Tentar de novo ou ir direto às Configurações.",
       "Sininho de novidades na barra de título — este aqui."
+    ],
+    "items_en": [
+      "Nano Banana now follows the Nano Banana Pro guide and has a JSON button, next to the microphone, that converts the prompt to structured JSON and back to text.",
+      "Veo 3 also generates prompts in JSON, with camera, lens, lighting, composition, layered audio and a list of forbidden elements.",
+      "Prompt optimization and image analysis can now be cancelled midway, with an X next to the progress.",
+      "Clear on the prompt gained an Undo, and starring and grouping images now respond to Ctrl+Z.",
+      "Confirmations no longer use the grey Windows box and follow the app's own look.",
+      "Errors now offer a way out: Try again, or go straight to Settings.",
+      "A what's-new bell in the title bar — this one right here."
     ]
   },
   {
@@ -23,6 +52,15 @@
       "Erros da interface reescritos em linguagem clara, com a solução junto.",
       "Corrigida a falha de arquivo em uso ao instalar a IA local.",
       "Versão para Mac voltou a ser publicada, com atualização automática funcionando."
+    ],
+    "items_en": [
+      "Wan 3.0 available in the Prompt Builder.",
+      "LTX renamed to LTX 2.5 and Seedance to Seedance 2.5.",
+      "Prompts for MiniMax H3 now always carry the timing of each event in the video.",
+      "Optimization stopped inventing things you did not write: your own text now carries the most weight.",
+      "Interface errors rewritten in plain language, with the fix alongside.",
+      "Fixed the file-in-use failure when installing the local AI.",
+      "The Mac build is being published again, with auto-update working."
     ]
   }
 ]

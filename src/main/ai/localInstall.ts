@@ -3,6 +3,7 @@ import { spawn } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { getLocalConfig, getLocalTextConfig } from './local'
+import { tm } from '../i18n'
 
 // Instalação 100% in-app da IA local (Ollama + modelo), só Windows por enquanto.
 // Fluxo: verifica → (baixa+instala Ollama silencioso, se preciso) → inicia → puxa o modelo.
@@ -55,7 +56,7 @@ function existingOllamaExe(): string | null {
 
 async function downloadFile(url: string, dest: string, onPercent: (pct: number) => void): Promise<void> {
   const res = await fetch(url) // fetch segue redirects (o link do Ollama redireciona pra CDN)
-  if (!res.ok || !res.body) throw new Error(`Download falhou (HTTP ${res.status})`)
+  if (!res.ok || !res.body) throw new Error(`Download failed (HTTP ${res.status})`)
   const total = Number(res.headers.get('content-length')) || 0
   let received = 0
 
@@ -97,7 +98,7 @@ function runSilentInstaller(installerPath: string): Promise<void> {
     // Instalador do Ollama é Inno Setup → flags silenciosas, instala por-usuário (sem UAC).
     const proc = spawn(installerPath, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'], { windowsHide: true })
     proc.on('error', reject)
-    proc.on('exit', code => code === 0 ? resolve() : reject(new Error(`Instalador saiu com código ${code}`)))
+    proc.on('exit', code => code === 0 ? resolve() : reject(new Error(`Installer exited with code ${code}`)))
   })
 
   // O Defender abre o .exe recém-baixado para escanear e o mantém travado por
@@ -111,10 +112,7 @@ function runSilentInstaller(installerPath: string): Promise<void> {
       } catch (err) {
         if (!isFileLockError(err)) throw err
         if (i >= waits.length) {
-          throw new Error(
-            'O instalador do Ollama ficou bloqueado por outro programa (normalmente o antivírus). ' +
-            'Aguarde alguns segundos e clique em "Tentar de novo".',
-          )
+          throw new Error('Ollama installer locked by another process (EBUSY)')
         }
         await new Promise(r => setTimeout(r, waits[i]))
       }
@@ -128,7 +126,7 @@ async function pullModel(root: string, model: string, onProgress: (pct: number, 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: model, stream: true }),
   })
-  if (!res.ok || !res.body) throw new Error(`Pull do modelo falhou (HTTP ${res.status})`)
+  if (!res.ok || !res.body) throw new Error(`Model pull failed (HTTP ${res.status})`)
 
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -207,20 +205,20 @@ export async function uninstallLocal(win: BrowserWindow): Promise<void> {
   if (installing) return
   installing = true
   try {
-    if (process.platform !== 'win32') throw new Error('Desinstalação automática disponível apenas no Windows.')
+    if (process.platform !== 'win32') throw new Error('Automatic uninstall is only on Windows.')
     const local = process.env.LOCALAPPDATA
     const ollamaExe = local ? path.join(local, 'Programs', 'Ollama', 'ollama.exe') : ''
 
-    send(win, { phase: 'uninstalling', percent: -1, message: 'Localizando o Ollama…' })
+    send(win, { phase: 'uninstalling', percent: -1, message: tm('main.install.locating') })
     const uninstaller = await findUninstaller()
     console.log('[uninstall] desinstalador =', uninstaller || '(não encontrado)')
-    if (!uninstaller) throw new Error('Não encontrei o desinstalador do Ollama. Desinstale pelo Painel de Controle do Windows.')
+    if (!uninstaller) throw new Error('Ollama uninstaller not found.')
 
-    send(win, { phase: 'uninstalling', percent: -1, message: 'Encerrando o Ollama…' })
+    send(win, { phase: 'uninstalling', percent: -1, message: tm('main.install.stopping') })
     await killOllama()
     await new Promise(r => setTimeout(r, 1000)) // deixa os processos caírem
 
-    send(win, { phase: 'uninstalling', percent: -1, message: 'Removendo o Ollama…' })
+    send(win, { phase: 'uninstalling', percent: -1, message: tm('main.install.removing') })
     // O desinstalador do Inno se copia pro temp e sai cedo — não confiamos no exit;
     // esperamos o ollama.exe sumir do disco (= desinstalação realmente concluída).
     // Sem um listener de 'error', uma falha do spawn (EBUSY/ENOENT) vira exceção
@@ -231,13 +229,13 @@ export async function uninstallLocal(win: BrowserWindow): Promise<void> {
     const target = (ollamaExe && fs.existsSync(ollamaExe)) ? ollamaExe : uninstaller
     const gone = await waitUntilGone(target, 90_000)
     console.log('[uninstall] concluído =', gone, '| alvo =', target)
-    if (!gone) throw new Error('A desinstalação não concluiu — o Ollama ainda está instalado. Tente pelo Painel de Controle.')
+    if (!gone) throw new Error('Uninstall did not complete; Ollama is still installed.')
 
-    send(win, { phase: 'done', percent: 100, message: 'Ollama desinstalado.' })
+    send(win, { phase: 'done', percent: 100, message: tm('main.install.uninstalled') })
   } catch (err) {
     console.error('[uninstall] erro:', err)
     send(win, {
-      phase: 'error', percent: 0, message: 'Falha ao desinstalar o Ollama',
+      phase: 'error', percent: 0, message: tm('main.install.uninstallFailed'),
       error: err instanceof Error ? err.message : String(err),
     })
   } finally {
@@ -255,14 +253,14 @@ export async function installLocalAI(win: BrowserWindow): Promise<void> {
   const root = apiRoot()
 
   try {
-    send(win, { phase: 'checking', percent: -1, message: 'Verificando Ollama…' })
+    send(win, { phase: 'checking', percent: -1, message: tm('main.install.checking') })
     let up = await isOllamaUp(root)
 
     // Instalado mas parado? Tenta iniciar antes de baixar de novo.
     if (!up) {
       const exe = existingOllamaExe()
       if (exe) {
-        send(win, { phase: 'starting', percent: -1, message: 'Iniciando Ollama…' })
+        send(win, { phase: 'starting', percent: -1, message: tm('main.install.starting') })
         // Idem: sem listener de 'error' um EBUSY aqui derrubaria o processo
         // principal. A falha é coberta pelo waitForOllama logo abaixo.
         const srv = spawn(exe, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true })
@@ -275,7 +273,7 @@ export async function installLocalAI(win: BrowserWindow): Promise<void> {
     // Não instalado → baixa e instala (Windows).
     if (!up) {
       if (process.platform !== 'win32') {
-        throw new Error('A instalação automática está disponível apenas no Windows por enquanto.')
+        throw new Error('Automatic installation is only on Windows for now.')
       }
       const dir = path.join(app.getPath('temp'), 'refmap-ollama')
       fs.mkdirSync(dir, { recursive: true })
@@ -289,16 +287,16 @@ export async function installLocalAI(win: BrowserWindow): Promise<void> {
         installerPath = path.join(dir, `OllamaSetup-${Date.now()}.exe`)
       }
 
-      send(win, { phase: 'downloading', percent: 0, message: 'Baixando Ollama…' })
+      send(win, { phase: 'downloading', percent: 0, message: tm('main.install.downloading') })
       await downloadFile(OLLAMA_INSTALLER_URL, installerPath, pct =>
-        send(win, { phase: 'downloading', percent: pct, message: 'Baixando Ollama…' }))
+        send(win, { phase: 'downloading', percent: pct, message: tm('main.install.downloading') }))
 
-      send(win, { phase: 'installing', percent: -1, message: 'Instalando Ollama…' })
+      send(win, { phase: 'installing', percent: -1, message: tm('main.install.installing') })
       await runSilentInstaller(installerPath)
 
-      send(win, { phase: 'starting', percent: -1, message: 'Iniciando Ollama…' })
+      send(win, { phase: 'starting', percent: -1, message: tm('main.install.starting') })
       up = await waitForOllama(root, 60_000)
-      if (!up) throw new Error('Ollama instalado, mas o serviço não respondeu. Reinicie o app e tente de novo.')
+      if (!up) throw new Error('Ollama installed but the service did not respond.')
 
       fs.rm(installerPath, () => {}) // limpa o instalador baixado
     }
@@ -308,15 +306,15 @@ export async function installLocalAI(win: BrowserWindow): Promise<void> {
     const models = textModel && textModel !== visionModel ? [visionModel, textModel] : [visionModel]
     for (let i = 0; i < models.length; i++) {
       const m = models[i]
-      const rotulo = m === visionModel ? 'visão (tags)' : 'texto (+18)'
+      const rotulo = tm(m === visionModel ? 'main.install.modelVision' : 'main.install.modelText')
       await pullModel(root, m, (pct, status) =>
-        send(win, { phase: 'pulling', percent: pct, message: status || `Baixando modelo de ${rotulo}…` }))
+        send(win, { phase: 'pulling', percent: pct, message: status || tm('main.install.pullingModel', { label: rotulo }) }))
     }
 
-    send(win, { phase: 'done', percent: 100, message: 'IA local pronta!' })
+    send(win, { phase: 'done', percent: 100, message: tm('main.install.ready') })
   } catch (err) {
     send(win, {
-      phase: 'error', percent: 0, message: 'Falha ao instalar a IA local',
+      phase: 'error', percent: 0, message: tm('main.install.failed'),
       error: err instanceof Error ? err.message : String(err),
     })
   } finally {

@@ -14,6 +14,7 @@ import { getLocalConfig, getLocalTextConfig, localChat, isLocalUnavailable, LOCA
 import { installLocalAI, uninstallLocal } from '../ai/localInstall'
 import { abrirOperacao, fecharOperacao, cancelarOperacao, foiCancelado, ABORTED } from '../ai/cancel'
 import { extractScenes, extractFrameAt } from '../video/extractScenes'
+import { tm, setMainLang, getMainLang } from '../i18n'
 
 export function registerHandlers(win: BrowserWindow): void {
   // ── Cancelamento de IA ─────────────────────────────────────
@@ -38,7 +39,7 @@ export function registerHandlers(win: BrowserWindow): void {
   ipcMain.handle('image:openFilePicker', async () => {
     const result = await dialog.showOpenDialog(win, {
       properties: ['openFile', 'multiSelections'],
-      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      filters: [{ name: tm('main.filePicker.images'), extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
     })
     return result.filePaths
   })
@@ -47,7 +48,7 @@ export function registerHandlers(win: BrowserWindow): void {
   ipcMain.handle('video:openFilePicker', async (): Promise<string | null> => {
     const result = await dialog.showOpenDialog(win, {
       properties: ['openFile'],
-      filters: [{ name: 'Vídeos', extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'] }],
+      filters: [{ name: tm('main.filePicker.videos'), extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'] }],
     })
     return result.filePaths[0] ?? null
   })
@@ -416,6 +417,9 @@ ${asJson ? closingJson : closing}\n\n${prompt}`
     // realista". A regra de não inventar existia só na mensagem do usuário e perdia
     // para o mandato estrutural daqui. Este override entra no MESMO nível do
     // mandato, para desarmá-lo.
+    // i18n-ignore-start — system prompt do modelo. O inglês é a língua da
+    // instrução e os exemplos em português são de PROPÓSITO: ensinam o modelo a
+    // reconhecer um pedido de edição escrito em português. Nada aqui é interface.
     const scopeOverride = `SCOPE — THIS RULE OUTRANKS EVERY STRUCTURAL INSTRUCTION ABOVE.
 
 AUTHORITY: the user's text is the sole authority over CONTENT — what exists, who is there, what happens. Everything above this line is authority over FORM only: wording, ordering, technical vocabulary. When form and content disagree, content wins and the form bends. Never the other way around.
@@ -426,6 +430,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
 - Never introduce a person, place, object, action, pose or camera move that the user did not name.
 - THE SUBJECT STAYS WHAT THE USER SAID IT IS. If the user's subject is an OBJECT — a garment, a product, a piece of furniture, a package — it stays that object, alone. Do NOT add a person to wear it, hold it, use it or stand near it. A tank top is a tank top, not a man in a tank top. A shoe is a shoe, not a model wearing shoes. Adding a human that the user never mentioned is one of the worst failures you can make here: the user's reference photo often contains only the object, and inventing a wearer makes the prompt unusable.
 - EDIT INSTRUCTIONS STAY EDIT INSTRUCTIONS: if the user is changing something in an image or video that already exists ("troque a jaqueta por couro", "coloque textura realista no vestido", "adicione rasgos na regata", "remova o fundo"), your output describes ONLY what changes and what must be preserved. Do NOT build a scene around it — no subject description, no setting, no lighting, no camera, no action, and above all no new people. The scene already exists; you are writing an instruction, not a scene.`
+    // i18n-ignore-end
 
     // A regra de idioma fica por último de propósito: é curta, é sobre forma e não
     // sobre conteúdo, então não compete com o escopo acima.
@@ -653,7 +658,9 @@ The sections, element lists, formulas and examples above describe the FULL vocab
       const result = await client.audio.transcriptions.create({
         file: fs.createReadStream(tempPath),
         model,
-        language: 'pt',
+        // Era 'pt' fixo: quem usa o app em inglês ditava em inglês e recebia a
+        // transcrição forçada para português. Segue o idioma do app.
+        language: getMainLang(),
       })
       return result.text
     } finally {
@@ -688,8 +695,16 @@ The sections, element lists, formulas and examples above describe the FULL vocab
   ipcMain.handle('settings:get', (_e, key: string) => settingQueries.get(key))
   ipcMain.handle('settings:set', (_e, key: string, value: string) => {
     settingQueries.set(key, value)
+    // O main mantém a própria cópia do idioma (não enxerga o Zustand). Sem isso,
+    // trocar o idioma no app deixaria o diálogo do updater e o progresso do
+    // Ollama no idioma antigo até o próximo boot.
+    if (key === 'appLang') setMainLang(value)
     return true
   })
+
+  // Idioma resolvido no boot: setting salva ou, na primeira execução, o idioma
+  // do sistema. O renderer usa isto em vez de assumir 'en'.
+  ipcMain.handle('settings:getLang', () => getMainLang())
 
   ipcMain.handle('app:getVersion', () => {
     const { app } = require('electron')

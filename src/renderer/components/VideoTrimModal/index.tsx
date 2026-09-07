@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useT } from '../../i18n'
 
 const fmt = (t: number) => {
   if (!isFinite(t) || t < 0) t = 0
@@ -17,6 +18,7 @@ export default function VideoTrimModal({
   onConfirm: (start: number, end: number) => void
   onCancel: () => void
 }) {
+  const t = useT()
   const videoRef = useRef<HTMLVideoElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const [duration, setDuration] = useState(0)
@@ -116,8 +118,8 @@ export default function VideoTrimModal({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.06]">
           <div className="min-w-0">
-            <div className="text-[13px] font-semibold text-white/85">Cortar duração do vídeo</div>
-            <div className="text-[11px] text-white/35 truncate">{videoName} · selecione o início e o fim</div>
+            <div className="text-[13px] font-semibold text-white/85">{t('video.trim.title')}</div>
+            <div className="text-[11px] text-white/35 truncate">{videoName} · {t('video.trim.subtitle')}</div>
           </div>
           <button onClick={onCancel} className="text-white/30 hover:text-white/60 transition-colors text-lg shrink-0 cursor-pointer">✕</button>
         </div>
@@ -145,8 +147,8 @@ export default function VideoTrimModal({
           </button>
           <span className="tabular-nums">{fmt(current)} / {fmt(duration)}</span>
           <div className="ml-auto flex items-center gap-2 text-[11px]">
-            <button onClick={() => setStart(Math.min(current, end - 0.1))} className="px-2 py-1 rounded-md border border-white/[0.08] hover:bg-white/[0.06] hover:text-white/80 transition-colors cursor-pointer">Início aqui</button>
-            <button onClick={() => setEnd(Math.max(current, start + 0.1))} className="px-2 py-1 rounded-md border border-white/[0.08] hover:bg-white/[0.06] hover:text-white/80 transition-colors cursor-pointer">Fim aqui</button>
+            <button onClick={() => setStart(Math.min(current, end - 0.1))} className="px-2 py-1 rounded-md border border-white/[0.08] hover:bg-white/[0.06] hover:text-white/80 transition-colors cursor-pointer">{t('video.trim.startHere')}</button>
+            <button onClick={() => setEnd(Math.max(current, start + 0.1))} className="px-2 py-1 rounded-md border border-white/[0.08] hover:bg-white/[0.06] hover:text-white/80 transition-colors cursor-pointer">{t('video.trim.endHere')}</button>
           </div>
         </div>
 
@@ -180,22 +182,22 @@ export default function VideoTrimModal({
             </div>
           </div>
           <div className="flex items-center justify-between mt-1.5 text-[10px] text-white/35 tabular-nums">
-            <span>início <span className="text-orange-400/80">{fmt(start)}</span></span>
-            <span>duração selecionada <span className="text-white/60">{fmt(Math.max(0, end - start))}</span></span>
-            <span>fim <span className="text-orange-400/80">{fmt(end)}</span></span>
+            <span>{t('video.trim.start')} <span className="text-orange-400/80">{fmt(start)}</span></span>
+            <span>{t('video.trim.selectedDuration')} <span className="text-white/60">{fmt(Math.max(0, end - start))}</span></span>
+            <span>{t('video.trim.end')} <span className="text-orange-400/80">{fmt(end)}</span></span>
           </div>
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-white/[0.06]">
-          <button onClick={onCancel} className="px-3.5 py-2 rounded-xl text-[12px] text-white/50 hover:text-white/80 transition-colors cursor-pointer">Cancelar</button>
+          <button onClick={onCancel} className="px-3.5 py-2 rounded-xl text-[12px] text-white/50 hover:text-white/80 transition-colors cursor-pointer">{t('common.cancel')}</button>
           <button
             disabled={duration <= 0 || end - start < 0.2}
             onClick={() => onConfirm(start, end)}
             className="px-4 py-2 rounded-xl text-[12px] font-medium text-white transition-opacity disabled:opacity-40 cursor-pointer"
             style={{ background: 'linear-gradient(135deg, #8f0e2e, #F97316)' }}
           >
-            Extrair cenas do trecho
+            {t('video.trim.extract')}
           </button>
         </div>
       </div>

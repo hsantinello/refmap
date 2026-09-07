@@ -2,70 +2,44 @@ import { useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import logoUrl from '../../assets/logo.png'
 import UpdateBanner from '../UpdateBanner'
-
-const TERMS_TEXT = `TERMOS DE USO — REF MAP
-Última atualização: junho de 2026
-
-1. ACEITAÇÃO
-Ao acessar e usar o Ref Map, você declara que leu, compreendeu e concorda com estes Termos. Se não concordar, não utilize o aplicativo.
-
-2. O QUE É O REF MAP
-O Ref Map é um software desktop para organização de imagens de referência e construção de prompts para ferramentas de IA generativa. O acesso é concedido mediante compra de licença.
-
-3. LICENÇA DE USO
-Ao adquirir o Ref Map, você recebe uma licença pessoal, não exclusiva e intransferível para uso do software. É vedado redistribuir, vender, sublicenciar ou compartilhar o acesso com terceiros.
-
-4. DADOS E PRIVACIDADE
-• Autenticação: seu e-mail é armazenado em um banco de dados seguro para controle de acesso.
-• API Keys: suas chaves de API (Anthropic/OpenAI) são armazenadas localmente no seu dispositivo com criptografia do sistema operacional. Não temos acesso a elas.
-• Imagens: suas imagens de referência são armazenadas apenas no seu dispositivo. Não enviamos imagens aos nossos servidores.
-• Thumbnails e metadados são processados localmente.
-
-5. CONTEÚDO GERADO POR IA
-Os prompts gerados pelo Ref Map pertencem a você. Somos responsáveis pelo funcionamento do software, mas não pela qualidade, adequação ou uso dos prompts gerados. O uso dos prompts em ferramentas de terceiros está sujeito aos termos dessas ferramentas.
-
-6. REEMBOLSOS
-A política de reembolso é gerenciada pela Hotmart, plataforma de venda do produto. Pedidos de reembolso devem ser realizados diretamente na Hotmart dentro do prazo legal de 7 dias.
-
-7. LIMITAÇÃO DE RESPONSABILIDADE
-O Ref Map é fornecido "como está". Não nos responsabilizamos por danos diretos ou indiretos decorrentes do uso do software, incluindo perda de dados ou uso indevido de conteúdo gerado por IA.
-
-8. USO ADEQUADO
-É vedado utilizar o Ref Map para gerar conteúdo ilegal, difamatório, que viole direitos de terceiros ou as políticas das ferramentas de IA integradas.
-
-9. ALTERAÇÕES
-Podemos atualizar estes Termos a qualquer momento. Atualizações serão comunicadas no aplicativo. O uso continuado após a notificação implica aceitação.
-
-10. CONTATO
-Dúvidas: app@refmap.santinello.com.br`
+import { useT } from '../../i18n'
+import { TERMS } from '../../../shared/i18n/terms'
+import { useCanvasStore } from '../../store'
 
 type Step = 'email' | 'otp'
 
 export default function Auth() {
+  const t = useT()
+  const appLang = useCanvasStore(s => s.appLang)
   const [step, setStep] = useState<Step>('email')
   const [email, setEmail] = useState('')
   const [otp, setOtp] = useState('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Antes isto era só uma string e a cor da mensagem saía de
+  // `error.includes('enviado')`. Funcionava enquanto o app era só em português;
+  // em inglês o aviso de sucesso apareceria em vermelho. O tipo agora é
+  // explícito, em vez de deduzido do texto.
+  const [aviso, setAviso] = useState<{ texto: string; sucesso: boolean } | null>(null)
+  const erro = (texto: string) => setAviso({ texto, sucesso: false })
   const [termsAccepted, setTermsAccepted] = useState(false)
   const [showTerms, setShowTerms] = useState(false)
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
-    setError(null)
+    setAviso(null)
 
     const { data: licensed, error: dbError } = await supabase
       .rpc('check_license', { p_email: email.toLowerCase().trim() })
 
-    if (dbError) { setError('Erro ao verificar e-mail. Tente novamente.'); setLoading(false); return }
-    if (!licensed) { setError('E-mail não encontrado. Adquira o Ref Map para ter acesso.'); setLoading(false); return }
+    if (dbError) { erro(t('auth.error.checkEmail')); setLoading(false); return }
+    if (!licensed) { erro(t('auth.error.notFound')); setLoading(false); return }
 
     const { error: otpError } = await supabase.auth.signInWithOtp({ email: email.toLowerCase().trim() })
 
     setLoading(false)
 
-    if (otpError) { setError('Erro ao enviar o código. Tente novamente.'); return }
+    if (otpError) { erro(t('auth.error.sendCode')); return }
 
     setStep('otp')
   }
@@ -73,12 +47,12 @@ export default function Auth() {
   const handleOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (otp.trim().length < 8) {
-      setError('Código incompleto, verifique novamente e coloque o código de 8 dígitos')
+      erro(t('auth.error.incompleteCode'))
       return
     }
 
     setLoading(true)
-    setError(null)
+    setAviso(null)
 
     try {
       // Timeout: se o cliente de auth estiver travado (ex.: sessão velha pendurada), não
@@ -91,23 +65,23 @@ export default function Auth() {
       if (error) {
         console.error('[login] verifyOtp falhou:', error)
         const msg = (error.message || '').toLowerCase()
-        setError(
+        erro(
           msg.includes('expired') || msg.includes('invalid') || msg.includes('token')
-            ? 'Código inválido ou expirado. Peça um novo código e digite na hora.'
-            : 'Não consegui entrar agora. Tente de novo em instantes.',
+            ? t('auth.error.invalidCode')
+            : t('auth.error.generic'),
         )
         return
       }
       if (!data.session) {
         // Verificou sem erro mas não veio sessão: estado inconsistente — não pode ficar mudo.
         console.error('[login] verifyOtp retornou sem sessão')
-        setError('Login não concluído. Feche e reabra o app e tente de novo.')
+        erro(t('auth.error.noSession'))
         return
       }
       // Sucesso — a tela troca sozinha via onAuthStateChange no App.
     } catch (err) {
       console.error('[login] verifyOtp timeout/exceção:', err)
-      setError('A verificação demorou demais. Confira sua internet e tente de novo.')
+      erro(t('auth.error.timeout'))
     } finally {
       setLoading(false)
     }
@@ -115,10 +89,10 @@ export default function Auth() {
 
   const handleResend = async () => {
     setLoading(true)
-    setError(null)
+    setAviso(null)
     await supabase.auth.signInWithOtp({ email: email.toLowerCase().trim() })
     setLoading(false)
-    setError('Novo código enviado.')
+    setAviso({ texto: t('auth.resend.sent'), sucesso: true })
   }
 
   return (
@@ -139,11 +113,11 @@ export default function Auth() {
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.06]">
-              <span className="text-[13px] font-semibold text-white/80">Termos de Uso</span>
+              <span className="text-[13px] font-semibold text-white/80">{t('auth.terms.title')}</span>
               <button onClick={() => setShowTerms(false)} className="text-white/30 hover:text-white/60 transition-colors text-lg">✕</button>
             </div>
             <div className="overflow-y-auto px-6 py-5" data-scrollable>
-              <pre className="text-[11.5px] text-white/45 leading-relaxed whitespace-pre-wrap font-sans">{TERMS_TEXT}</pre>
+              <pre className="text-[11.5px] text-white/45 leading-relaxed whitespace-pre-wrap font-sans">{TERMS[appLang]}</pre>
             </div>
             <div className="px-6 py-4 border-t border-white/[0.06]">
               <button
@@ -151,7 +125,7 @@ export default function Auth() {
                 className="w-full py-2.5 rounded-xl text-[13px] font-medium text-white transition-opacity"
                 style={{ background: 'linear-gradient(135deg, #8f0e2e, #F97316)' }}
               >
-                Aceitar e fechar
+                {t('auth.terms.accept')}
               </button>
             </div>
           </div>
@@ -191,14 +165,14 @@ export default function Auth() {
 
         {step === 'email' ? (
           <>
-            <h1 className="text-white/85 text-[17px] font-semibold mb-1">Acessar o Ref Map</h1>
+            <h1 className="text-white/85 text-[17px] font-semibold mb-1">{t('auth.email.title')}</h1>
             <p className="text-white/25 text-[12px] mb-7 text-center">
-              Digite o e-mail usado na sua compra
+              {t('auth.email.subtitle')}
             </p>
             <form onSubmit={handleEmailSubmit} className="w-full flex flex-col gap-3">
               <input
                 type="email"
-                placeholder="seu@email.com"
+                placeholder={t('auth.email.placeholder')}
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 required
@@ -210,7 +184,7 @@ export default function Auth() {
                 <div
                   role="checkbox"
                   aria-checked={termsAccepted}
-                  aria-label="Li e concordo com os Termos de Uso"
+                  aria-label={t('auth.terms.checkboxLabel')}
                   tabIndex={0}
                   className="auth-checkbox w-4 h-4 rounded mt-0.5 shrink-0 flex items-center justify-center transition-all cursor-pointer"
                   style={{
@@ -234,34 +208,34 @@ export default function Auth() {
                   )}
                 </div>
                 <span className="text-[11px] text-white/30 leading-relaxed">
-                  Li e concordo com os{' '}
+                  {t('auth.terms.agreePrefix')}{' '}
                   <button
                     type="button"
                     tabIndex={-1}
                     onClick={() => setShowTerms(true)}
                     className="text-orange-400/70 hover:text-orange-400 underline transition-colors"
                   >
-                    Termos de Uso
+                    {t('auth.terms.title')}
                   </button>
                 </span>
               </div>
 
-              {error && <p className="text-red-400/75 text-[12px] text-center leading-snug">{error}</p>}
+              {aviso && <p className={`text-[12px] text-center leading-snug ${aviso.sucesso ? 'text-green-400/70' : 'text-red-400/75'}`}>{aviso.texto}</p>}
               <button
                 type="submit"
                 disabled={loading || !termsAccepted}
                 className="w-full py-3 rounded-xl text-[13px] font-medium text-white transition-opacity"
                 style={{ background: 'linear-gradient(135deg, #8f0e2e, #F97316)', opacity: (loading || !termsAccepted) ? 0.4 : 1 }}
               >
-                {loading ? 'Enviando código...' : 'Continuar'}
+                {loading ? t('auth.email.sending') : t('auth.email.continue')}
               </button>
             </form>
           </>
         ) : (
           <>
-            <h1 className="text-white/85 text-[17px] font-semibold mb-1">Verifique seu e-mail</h1>
+            <h1 className="text-white/85 text-[17px] font-semibold mb-1">{t('auth.otp.title')}</h1>
             <p className="text-white/25 text-[12px] mb-7 text-center">
-              Enviamos um código de 8 dígitos para<br />
+              {t('auth.otp.subtitle')}<br />
               <span className="text-white/40">{email}</span>
             </p>
             <form onSubmit={handleOtpSubmit} className="w-full flex flex-col gap-3">
@@ -275,9 +249,9 @@ export default function Auth() {
                 inputMode="numeric"
                 className="auth-input w-full rounded-xl px-4 py-3 text-[13px] text-center tracking-[0.3em]"
               />
-              {error && (
-                <p className={`text-[12px] text-center leading-snug ${error.includes('enviado') ? 'text-green-400/70' : 'text-red-400/75'}`}>
-                  {error}
+              {aviso && (
+                <p className={`text-[12px] text-center leading-snug ${aviso.sucesso ? 'text-green-400/70' : 'text-red-400/75'}`}>
+                  {aviso.texto}
                 </p>
               )}
               <button
@@ -286,7 +260,7 @@ export default function Auth() {
                 className="w-full py-3 rounded-xl text-[13px] font-medium text-white transition-opacity"
                 style={{ background: 'linear-gradient(135deg, #8f0e2e, #F97316)', opacity: loading ? 0.5 : 1 }}
               >
-                {loading ? 'Verificando...' : 'Entrar'}
+                {loading ? t('auth.otp.verifying') : t('auth.otp.signIn')}
               </button>
             </form>
             <button
@@ -294,13 +268,13 @@ export default function Auth() {
               disabled={loading}
               className="mt-4 text-[11px] text-white/20 hover:text-white/50 transition-colors disabled:opacity-40"
             >
-              Reenviar código
+              {t('auth.otp.resend')}
             </button>
             <button
-              onClick={() => { setStep('email'); setOtp(''); setError(null) }}
+              onClick={() => { setStep('email'); setOtp(''); setAviso(null) }}
               className="mt-3 text-[11px] text-white/15 hover:text-white/40 transition-colors"
             >
-              ← Trocar e-mail
+              {t('auth.otp.changeEmail')}
             </button>
           </>
         )}

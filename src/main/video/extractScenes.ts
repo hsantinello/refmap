@@ -19,7 +19,7 @@ const MAX_FRAME_WIDTH = 1280
 // asar (ver "asarUnpack" no package.json), então trocamos app.asar → app.asar.unpacked.
 function resolveFfmpegPath(): string {
   const raw = (ffmpegStatic as unknown as string) || ''
-  if (!raw) throw new Error('ffmpeg-static: binário não encontrado')
+  if (!raw) throw new Error('ffmpeg-static: binary not found')
   return raw.replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep).replace('app.asar/', 'app.asar.unpacked/')
 }
 
@@ -196,7 +196,7 @@ function runFfmpeg(bin: string, args: string[]): Promise<string> {
     proc.on('error', reject)
     proc.on('close', code => {
       if (code === 0) resolve(stderr)
-      else reject(new Error(`ffmpeg saiu com código ${code}: ${stderr.slice(-800)}`))
+      else reject(new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-800)}`))
     })
   })
 }

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { autoUpdater } from 'electron-updater'
+import { tm } from './i18n'
 
 let win: BrowserWindow | null = null
 let updateReady = false   // true quando uma atualização já foi BAIXADA e está pronta
@@ -99,13 +100,13 @@ export function initUpdater(mainWindow: BrowserWindow): void {
     e.preventDefault()
     const choice = dialog.showMessageBoxSync(mainWindow, {
       type: 'question',
-      buttons: ['Atualizar e fechar', 'Apenas fechar'],
+      buttons: [tm('main.updater.buttonUpdate'), tm('main.updater.buttonClose')],
       defaultId: 0,
       cancelId: 1,
       noLink: true,
-      title: 'Atualização disponível',
-      message: 'Há uma atualização do Ref Map pronta para instalar.',
-      detail: 'Quer instalar agora ao fechar o aplicativo?',
+      title: tm('main.updater.title'),
+      message: tm('main.updater.message'),
+      detail: tm('main.updater.detail'),
     })
     closeDecided = true
     if (choice === 0) {

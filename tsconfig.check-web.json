@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.web.json",
+  "compilerOptions": { "composite": false, "noEmit": true, "incremental": false, "declaration": false },
+  "include": ["src/renderer/**/*", "src/shared/**/*"]
+}

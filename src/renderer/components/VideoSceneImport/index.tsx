@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useT } from '../../i18n'
 
 export interface SceneFrame {
   index: number
@@ -28,6 +29,7 @@ export default function VideoSceneImport({
   onCancel: () => void
   onReextract: (direction: 'more' | 'fewer') => void
 }) {
+  const t = useT()
   // Cenas capturadas MANUALMENTE pelo usuário (agulha no tempo + botão), mantidas
   // localmente e mescladas às cenas da IA. Índices altos pra não colidir com as da IA.
   const [extra, setExtra] = useState<SceneFrame[]>([])
@@ -92,10 +94,10 @@ export default function VideoSceneImport({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.06]">
           <div className="min-w-0">
-            <div className="text-[13px] font-semibold text-white/85">Cenas do vídeo</div>
+            <div className="text-[13px] font-semibold text-white/85">{t('video.scenes.title')}</div>
             <div className="text-[11px] text-white/35 truncate">
-              {videoName} · {frames.length} cena{frames.length === 1 ? '' : 's'}
-              {capped ? ' · limite atingido (há mais cenas)' : ''}
+              {videoName} · {t(frames.length === 1 ? 'video.scenes.count.one' : 'video.scenes.count.other', { count: frames.length })}
+              {capped ? t('video.scenes.capped') : ''}
             </div>
           </div>
           <button onClick={onCancel} className="text-white/30 hover:text-white/60 transition-colors text-lg shrink-0">✕</button>
@@ -112,7 +114,7 @@ export default function VideoSceneImport({
           />
           <div className="flex items-center justify-between gap-2">
             <span className="text-[10px] text-white/35">
-              Mova a agulha até o momento que quiser e capture a cena manualmente.
+              {t('video.scenes.scrubHint')}
             </span>
             <button
               onClick={captureCurrent}
@@ -139,26 +141,26 @@ export default function VideoSceneImport({
         {/* Controles */}
         <div className="flex items-center justify-between px-5 py-2.5 border-b border-white/[0.06] text-[11px]">
           <div className="flex items-center gap-2 text-white/40">
-            <span>Sensibilidade:</span>
+            <span>{t('video.scenes.sensitivity')}</span>
             <button
               disabled={busy}
               onClick={() => onReextract('fewer')}
               className="px-2 py-1 rounded-md border border-white/[0.08] hover:bg-white/[0.06] hover:text-white/70 transition-colors disabled:opacity-40"
             >
-              − menos cenas
+              {t('video.scenes.fewer')}
             </button>
             <button
               disabled={busy}
               onClick={() => onReextract('more')}
               className="px-2 py-1 rounded-md border border-white/[0.08] hover:bg-white/[0.06] hover:text-white/70 transition-colors disabled:opacity-40"
             >
-              + mais cenas
+              {t('video.scenes.more')}
             </button>
           </div>
           <div className="flex items-center gap-2 text-white/40">
-            <button onClick={() => setSelected(new Set(allFrames.map(f => f.index)))} className="hover:text-white/70 transition-colors">Todas</button>
+            <button onClick={() => setSelected(new Set(allFrames.map(f => f.index)))} className="hover:text-white/70 transition-colors">{t('common.all')}</button>
             <span className="text-white/15">·</span>
-            <button onClick={() => setSelected(new Set())} className="hover:text-white/70 transition-colors">Nenhuma</button>
+            <button onClick={() => setSelected(new Set())} className="hover:text-white/70 transition-colors">{t('common.none')}</button>
           </div>
         </div>
 
@@ -212,17 +214,17 @@ export default function VideoSceneImport({
         {/* Footer */}
         <div className="flex items-center justify-between px-5 py-3.5 border-t border-white/[0.06]">
           <div className="text-[11px] text-white/40">
-            {selected.size} selecionada{selected.size === 1 ? '' : 's'} · cada uma será analisada pela IA
+            {t(selected.size === 1 ? 'video.scenes.selected.one' : 'video.scenes.selected.other', { count: selected.size })} {t('video.scenes.willAnalyze')}
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={onCancel} className="px-3.5 py-2 rounded-xl text-[12px] text-white/50 hover:text-white/80 transition-colors">Cancelar</button>
+            <button onClick={onCancel} className="px-3.5 py-2 rounded-xl text-[12px] text-white/50 hover:text-white/80 transition-colors">{t('common.cancel')}</button>
             <button
               disabled={selected.size === 0 || busy}
               onClick={() => onConfirm(selectedPaths)}
               className="px-4 py-2 rounded-xl text-[12px] font-medium text-white transition-opacity disabled:opacity-40"
               style={{ background: 'linear-gradient(135deg, #8f0e2e, #F97316)' }}
             >
-              Adicionar {selected.size} ao canvas
+              {t('video.scenes.addToCanvas', { count: selected.size })}
             </button>
           </div>
         </div>

@@ -15,6 +15,7 @@ import { ConfirmHost } from './components/ConfirmDialog'
 import { ensureWhisper, isWhisperReady } from './lib/localWhisper'
 import { useCanvasStore, usePromptStore } from './store'
 import { supabase, isLicenseActive } from './lib/supabase'
+import { t } from './i18n'
 
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined)
@@ -41,12 +42,15 @@ export default function App() {
   // na mesma barra da IA local — assim o "Baixar" traz texto + voz de uma vez só.
   const downloadWhisperModel = async () => {
     if (isWhisperReady()) {
-      setInstallProgress({ phase: 'done', percent: 100, message: 'Pronto' })
+      setInstallProgress({ phase: 'done', percent: 100, message: t('app.install.ready') })
       setTimeout(() => setInstallProgress(null), 2500)
       return
     }
     const files = new Map<string, { loaded: number; total: number }>()
-    setInstallProgress({ phase: 'downloading', percent: -1, message: 'Baixando modelo de voz' })
+    // Resolvido uma vez: o callback abaixo usa `t` como acumulador de bytes, e o
+    // idioma não muda no meio de um download.
+    const voiceMsg = t('app.install.voiceModel')
+    setInstallProgress({ phase: 'downloading', percent: -1, message: voiceMsg })
     try {
       await ensureWhisper(p => {
         if (p.file && typeof p.total === 'number') {
@@ -56,18 +60,18 @@ export default function App() {
         let l = 0, t = 0
         for (const f of files.values()) { l += f.loaded; t += f.total }
         const percent = t > 0 ? Math.min(99, Math.round((l / t) * 100)) : -1
-        setInstallProgress({ phase: 'downloading', percent, message: 'Baixando modelo de voz' })
+        setInstallProgress({ phase: 'downloading', percent, message: voiceMsg })
       })
-      setInstallProgress({ phase: 'done', percent: 100, message: 'Pronto' })
+      setInstallProgress({ phase: 'done', percent: 100, message: t('app.install.ready') })
     } catch {
       // Whisper falhou, mas a IA local de texto já instalou — não trava o fluxo.
-      setInstallProgress({ phase: 'done', percent: 100, message: 'IA local pronta' })
+      setInstallProgress({ phase: 'done', percent: 100, message: t('app.install.localReady') })
     }
     setTimeout(() => setInstallProgress(null), 2500)
   }
 
   const startLocalUninstall = () => {
-    setInstallProgress({ phase: 'uninstalling', percent: -1, message: 'Desinstalando o Ollama…' })
+    setInstallProgress({ phase: 'uninstalling', percent: -1, message: t('app.install.uninstalling') })
     window.api.uninstallLocalAI().catch(() => {})
   }
   // Primeira execução: abre a tela de escolha (Local vs API) antes do tutorial.
@@ -236,9 +240,10 @@ export default function App() {
 
   useEffect(() => {
     const init = async () => {
-      // Restore app language preference
-      const lang = await window.api.getSetting('appLang')
-      useCanvasStore.getState().setAppLang(lang === 'pt' ? 'pt' : 'en')
+      // Idioma: o main já resolveu no boot (setting salva → idioma do sistema →
+      // 'en'). Antes lia-se a setting direto aqui, e na primeira execução isso
+      // caía em 'en' mesmo num Windows em português.
+      useCanvasStore.getState().setAppLang(await window.api.getLang())
 
       // Primeira execução: mostra a tela "Como deseja usar o app?" (Local vs API)
       // ANTES do tutorial. O tutorial é disparado quando essa escolha é fechada.
@@ -288,10 +293,12 @@ export default function App() {
         const metadataDbNodes = nodes.filter(n => n.node_type === 'metadata')
 
         const groupFlowNodes = groupDbNodes.map(n => {
-          // Nome do grupo persistido em comfy_params ({ label }); fallback 'Grupo'.
-          let groupLabel = 'Grupo'
+          // Nome do grupo persistido em comfy_params ({ label }); só o fallback
+          // é traduzido — o nome que o usuário deu fica como ele escreveu.
+          const rotuloPadrao = t('canvas.group.defaultLabel')
+          let groupLabel = rotuloPadrao
           if (n.comfy_params) {
-            try { groupLabel = (JSON.parse(n.comfy_params) as { label?: string }).label || 'Grupo' } catch { /* ignore */ }
+            try { groupLabel = (JSON.parse(n.comfy_params) as { label?: string }).label || rotuloPadrao } catch { /* ignore */ }
           }
           return {
             id: n.id,

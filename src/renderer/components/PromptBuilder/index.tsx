@@ -1,4 +1,4 @@
-import { Fragment, useState, useRef, useEffect, forwardRef } from 'react'
+import { Fragment, useState, useRef, useEffect, useMemo, forwardRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { createPortal } from 'react-dom'
 import { friendlyError, foiCancelado, type Recovery } from '../../lib/friendlyError'
@@ -20,10 +20,14 @@ import { CSS } from '@dnd-kit/utilities'
 import { usePromptStore, useCanvasStore, WEIGHT_STEP, type PromptTag } from '../../store'
 import { recordDuration, getEstimateSeconds } from '../../lib/estimate'
 import { ensureWhisper, transcribeLocal, isWhisperReady } from '../../lib/localWhisper'
+import { useT } from '../../i18n'
+import type { I18nKey } from '../../../shared/i18n'
 
 // hasCloudKey = há transcrição na nuvem disponível (Whisper OpenAI/Together). Sem isso
 // (ex.: provedor ativo = Claude, que não transcreve), cai no Whisper local, gratuito.
 function MicButton({ onTranscript, hasCloudKey }: { onTranscript: (text: string) => void; hasCloudKey: boolean }) {
+  const t = useT()
+  const appLang = useCanvasStore(s => s.appLang)
   const [state, setState] = useState<'idle' | 'recording' | 'downloading' | 'transcribing' | 'error'>('idle')
   const [dlPercent, setDlPercent] = useState(0)
   const [errorMsg, setErrorMsg] = useState('')
@@ -163,32 +167,35 @@ function MicButton({ onTranscript, hasCloudKey }: { onTranscript: (text: string)
               if (p.status === 'progress' && typeof p.progress === 'number') setDlPercent(Math.round(p.progress))
             })
             setState('transcribing')
-            const text = await transcribeLocal(blob)
+            // O Whisper precisa do idioma FALADO. Sem passar nada ele caía no
+            // 'pt' fixo do default — quem usa o app em inglês ditava em inglês e
+            // recebia a transcrição forçada para português.
+            const text = await transcribeLocal(blob, appLang)
             if (text?.trim()) onTranscript(text.trim())
           }
           setState('idle')
         } catch (err) {
           console.error('[transcrição] erro:', err)
           const msg = String((err as Error)?.message || err)
-          if (msg.includes('NO_OPENAI_KEY')) showError('Chave API não configurada')
+          if (msg.includes('NO_OPENAI_KEY')) showError(t('promptBuilder.mic.noKey'))
           else if (!hasCloudKey) showError(`Local: ${msg.slice(0, 140)}`)
-          else showError('Erro ao transcrever')
+          else showError(t('promptBuilder.mic.failed'))
         }
       }
       recorder.start()
       recorderRef.current = recorder
       setState('recording')
     } catch {
-      showError('Sem acesso ao microfone')
+      showError(t('promptBuilder.mic.noMic'))
     }
   }
   toggleRef.current = toggle // mantém o atalho Ctrl+D chamando o toggle mais recente
 
-  const label = state === 'recording' ? 'Parar gravação (Ctrl+D)'
-    : state === 'downloading' ? `Baixando modelo de voz… ${dlPercent}%`
-    : state === 'transcribing' ? 'Transcrevendo...'
+  const label = state === 'recording' ? t('promptBuilder.mic.stop')
+    : state === 'downloading' ? t('promptBuilder.mic.downloading', { percent: dlPercent })
+    : state === 'transcribing' ? t('promptBuilder.mic.transcribing')
     : state === 'error' ? errorMsg
-    : hasCloudKey ? 'Ditar prompt (Ctrl+D)' : 'Ditar prompt · voz local grátis (Ctrl+D)'
+    : hasCloudKey ? t('promptBuilder.mic.dictate') : t('promptBuilder.mic.dictateLocal')
 
   const bgClass = state === 'recording' ? 'bg-red-500/20'
     : state === 'downloading' || state === 'transcribing' ? 'bg-orange-500/15'
@@ -234,7 +241,7 @@ function MicButton({ onTranscript, hasCloudKey }: { onTranscript: (text: string)
       )}
       {state === 'downloading' && (
         <div className="absolute right-full mr-2 top-1/2 -translate-y-1/2 flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-black/85 border border-white/10 shadow-[0_12px_32px_rgba(0,0,0,0.6)] pointer-events-none backdrop-blur-md">
-          <span className="text-[11px] text-white/70 whitespace-nowrap">Baixando voz local</span>
+          <span className="text-[11px] text-white/70 whitespace-nowrap">{t('promptBuilder.mic.downloadingShort')}</span>
           <div className="w-16 h-1 rounded-full bg-white/10 overflow-hidden">
             <div className="h-full rounded-full bg-orange-500 transition-all" style={{ width: `${dlPercent}%` }} />
           </div>
@@ -290,6 +297,7 @@ function InsertZone({ index, activeIndex, onActivate, onCommit, onCancel }: {
 }
 
 function SortableChip({ tag }: { tag: PromptTag }) {
+  const t = useT()
   const store = usePromptStore()
   const removeTag = store.removeTag
   const updateTagText = store.updateTagText
@@ -352,23 +360,23 @@ function SortableChip({ tag }: { tag: PromptTag }) {
             setEditValue(tag.value)
             setEditing(true)
           }}
-          title="Clique para editar"
+          title={t('promptBuilder.tag.editTooltip')}
         >
           {tag.value}
         </span>
       )}
       <div className="flex items-center gap-1 pl-1.5 pr-1.5 shrink-0">
-        {showWeight && <span className="rm-weight-badge" title="Peso">{wStr}</span>}
+        {showWeight && <span className="rm-weight-badge" title={t('promptBuilder.tag.weight')}>{wStr}</span>}
         <div className="rm-weight-stepper flex flex-col opacity-0 group-hover:opacity-80 transition-opacity">
           <button
-            title="Aumentar peso"
+            title={t('promptBuilder.tag.weightUp')}
             onClick={e => { e.stopPropagation(); bump(WEIGHT_STEP) }}
             onPointerDown={e => e.stopPropagation()}
           >
             <svg width="8" height="5" viewBox="0 0 8 5" fill="none"><path d="M1 4L4 1L7 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
           </button>
           <button
-            title="Diminuir peso"
+            title={t('promptBuilder.tag.weightDown')}
             onClick={e => { e.stopPropagation(); bump(-WEIGHT_STEP) }}
             onPointerDown={e => e.stopPropagation()}
           >
@@ -624,9 +632,11 @@ const DroppableTextarea = forwardRef<HTMLTextAreaElement, {
   )
 })
 
-const MODEL_GROUPS = [
+// `groupKey` precisa ser I18nKey, e não string, senão o dicionário deixa de
+// validar o nome da chave aqui dentro.
+const MODEL_GROUPS: { groupKey: I18nKey; models: { id: string; label: string; nsfw?: boolean; json?: boolean }[] }[] = [
   {
-    group: 'Imagem',
+    groupKey: 'promptBuilder.models.image',
     models: [
       { id: 'boogu',              label: 'Boogu' },
       { id: 'flux',               label: 'Flux',            nsfw: true },
@@ -643,7 +653,7 @@ const MODEL_GROUPS = [
     ],
   },
   {
-    group: 'Vídeo',
+    groupKey: 'promptBuilder.models.video',
     models: [
       { id: 'gemini-omni',  label: 'Gemini Omni' },
       { id: 'hailuo',      label: 'Hailuo Minimax' },
@@ -671,6 +681,8 @@ const modelLabel = (id?: string) => id ? (MODELS.find(m => m.id === id)?.label ?
 type HistoryEntry = { text: string; model?: string; source?: string }
 
 export default function PromptBuilder() {
+  const t = useT()
+  const appLang = useCanvasStore(s => s.appLang)
   const {
     promptTags, reorderTags, clearAll, getPromptString, insertTagAt, removeTag, updateTagText,
     setPromptTags,
@@ -722,6 +734,8 @@ export default function PromptBuilder() {
   const [inputText, setInputText] = useState('')
   const [targetModel, setTargetModel] = useState<string | null>(null)
   const [showModels, setShowModels] = useState(false)
+  // Item destacado na navegação por teclado. -1 = nenhum (menu aberto no mouse).
+  const [modelHighlight, setModelHighlight] = useState(-1)
   const [optimizing, setOptimizing] = useState(false)
   const [optElapsed, setOptElapsed] = useState(0)          // segundos decorridos
   const [optEstimate, setOptEstimate] = useState<number | null>(null) // estimativa (s)
@@ -852,7 +866,16 @@ export default function PromptBuilder() {
     setTimeout(() => setCopied(false), 1500)
     // Save to history (max 10 entries, deduplicated)
     if (currentCanvasId) {
-      const newHistory: HistoryEntry[] = [{ text }, ...history.filter(h => h.text !== text)].slice(0, 10)
+      // A entrada volta para o topo, mas PRESERVANDO de onde ela veio. Antes esta
+      // linha gravava só `{ text }`, e como copiar um prompt recém-otimizado usa
+      // exatamente o mesmo texto, o dedup abaixo apagava a entrada rica e punha
+      // uma pelada no lugar — matando o botão direito ("restaurar o original")
+      // justamente nos prompts que a pessoa de fato usou.
+      const anterior = history.find(h => h.text === text)
+      const newHistory: HistoryEntry[] = [
+        { text, model: anterior?.model, source: anterior?.source },
+        ...history.filter(h => h.text !== text),
+      ].slice(0, 10)
       setHistory(newHistory)
       window.api.setSetting(`promptHistory_${currentCanvasId}`, JSON.stringify(newHistory))
     }
@@ -950,12 +973,69 @@ export default function PromptBuilder() {
     await runOptimize(modelId, 'text')
   }
 
+  // Ordem em que as setas percorrem o menu — a mesma da tela, atravessando os
+  // grupos. `null` é o item "Nenhum", que só existe quando há modelo escolhido.
+  const modelNavIds = useMemo<(string | null)[]>(() => [
+    ...(targetModel ? [null] : []),
+    ...MODEL_GROUPS.flatMap(g => g.models.map(m => m.id)),
+  ], [targetModel])
+
+  /** Abre o menu de modelos ancorado no botão. `viaTeclado` já destaca um item,
+   *  para a primeira seta continuar de onde faz sentido em vez de recomeçar. */
+  const abrirMenuModelos = (viaTeclado: boolean) => {
+    if (modelBtnRef.current) {
+      const r = modelBtnRef.current.getBoundingClientRect()
+      setDropdownPos({ x: r.left, y: r.top })
+    }
+    setModelHighlight(viaTeclado ? Math.max(0, modelNavIds.indexOf(targetModel)) : -1)
+    setShowModels(true)
+  }
+
+  // Navegação por teclado no menu de modelos.
+  //
+  // O listener é de CAPTURA e fica na window de propósito: o foco continua no
+  // textarea (a pessoa estava escrevendo), e o textarea faz stopPropagation no
+  // keydown — um listener de bolha nunca veria as setas.
+  useEffect(() => {
+    if (!showModels) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        // preventDefault também impede o cursor de andar dentro do textarea.
+        e.preventDefault(); e.stopPropagation()
+        const total = modelNavIds.length
+        if (!total) return
+        const passo = e.key === 'ArrowDown' ? 1 : -1
+        setModelHighlight(i => i < 0 ? (passo === 1 ? 0 : total - 1) : (i + passo + total) % total)
+        return
+      }
+      if (e.key === 'Enter' && modelHighlight >= 0) {
+        e.preventDefault(); e.stopPropagation()
+        const escolhido = modelNavIds[modelHighlight]
+        if (escolhido === null) { setTargetModel(null); setShowModels(false); return }
+        // Enter SEMPRE otimiza. O toggle do clique (escolher o modelo que já está
+        // selecionado o desliga) seria surpresa aqui: quem apertou Tab quer rodar,
+        // e para desligar existe o item "Nenhum" no topo da lista.
+        setTargetModel(escolhido)
+        setShowModels(false)
+        void runOptimize(escolhido, 'text')
+        return
+      }
+      if (e.key === 'Escape' || e.key === 'Tab') {
+        e.preventDefault(); e.stopPropagation()
+        setShowModels(false)
+        textInputRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [showModels, modelHighlight, modelNavIds])
+
   const runOptimize = async (modelId: string, format: 'text' | 'json' = 'text', sourceOverride?: string) => {
 
     const parts = [getPromptString(), inputText.trim()].filter(Boolean)
     const currentPrompt = sourceOverride ?? parts.join(', ')
     if (!currentPrompt) {
-      setOptimizeError('Adicione conteúdo ao prompt primeiro')
+      setOptimizeError(t('promptBuilder.needContent'))
       setTimeout(() => setOptimizeError(null), 4000)
       return
     }
@@ -1024,17 +1104,17 @@ export default function PromptBuilder() {
       if (msg.includes('LOCAL_AI_UNAVAILABLE')) {
         pendingModelRef.current = modelId
         setTargetModel(null)
-        setSetupHint('A IA local não está rodando. Clique para configurar')
+        setSetupHint(t('promptBuilder.hint.localDown'))
       } else if (msg.includes('API key not configured')) {
         pendingModelRef.current = modelId
         setTargetModel(null)
-        setSetupHint('Para aprimorar um prompt configure sua API')
+        setSetupHint(t('promptBuilder.hint.noKey'))
       } else {
         // Demais falhas (limite de uso, chave recusada, provedor fora do ar,
         // sem internet…): antes caíam todas num CTA genérico de "configure a
         // IA", que mandava o usuário para o lugar errado. Agora dizemos o que
         // de fato aconteceu e o que ele pode fazer.
-        const f = friendlyError(err, 'Não foi possível aprimorar o prompt.')
+        const f = friendlyError(err, t('promptBuilder.optimizeFailed'))
         setOptimizeError(f.message)
         setOptimizeErrorHelp([f.action, f.technical].filter(Boolean).join('\n\n'))
         setOptRecovery(f.recovery)
@@ -1103,8 +1183,17 @@ export default function PromptBuilder() {
                 ref={textInputRef}
                 value={inputText}
                 onChange={e => setInputText(e.target.value)}
-                onKeyDown={e => e.stopPropagation()}
-                placeholder="Escrever prompt..."
+                onKeyDown={e => {
+                  e.stopPropagation()
+                  // Tab escolhe o modelo sem tirar as mãos do teclado. Só quando
+                  // há o que otimizar — e não quando o botão virou CTA de setup,
+                  // que nesse estado leva às Configurações, não a uma lista.
+                  if (e.key === 'Tab' && !e.shiftKey && hasContent && !setupHint) {
+                    e.preventDefault()
+                    abrirMenuModelos(true)
+                  }
+                }}
+                placeholder={t('promptBuilder.placeholder')}
               />
             )}
           </DndContext>
@@ -1125,11 +1214,8 @@ export default function PromptBuilder() {
                       window.dispatchEvent(new CustomEvent('open-settings'))
                       return
                     }
-                    if (!showModels && modelBtnRef.current) {
-                      const r = modelBtnRef.current.getBoundingClientRect()
-                      setDropdownPos({ x: r.left, y: r.top })
-                    }
-                    setShowModels(v => !v)
+                    if (showModels) setShowModels(false)
+                    else abrirMenuModelos(false)
                   }}
                   title={optimizeError ? [optimizeError, optimizeErrorHelp].filter(Boolean).join('\n\n') : undefined}
                   className={`flex items-center gap-1.5 text-[11px] transition-colors px-2 py-1 rounded-md ${setupHint ? 'cursor-pointer' : 'max-w-[200px] truncate'} ${
@@ -1144,9 +1230,9 @@ export default function PromptBuilder() {
                 >
                   <span>{optimizing
                     ? (optEstimate == null
-                        ? `Otimizando… ${optElapsed}s`
-                        : (optEstimate - optElapsed > 0 ? `Otimizando… restam ~${optEstimate - optElapsed}s` : 'Otimizando…'))
-                    : setupHint ? setupHint : (optimizeError ?? (targetModel ? MODELS.find(m => m.id === targetModel)?.label : 'Otimizar para...'))}</span>
+                        ? t('promptBuilder.optimizing', { elapsed: optElapsed })
+                        : (optEstimate - optElapsed > 0 ? t('promptBuilder.optimizingLeft', { left: optEstimate - optElapsed }) : t('promptBuilder.optimizingPlain')))
+                    : setupHint ? setupHint : (optimizeError ?? (targetModel ? MODELS.find(m => m.id === targetModel)?.label : t('promptBuilder.optimizeFor')))}</span>
                   {!setupHint && !optimizing && (
                     <svg width="8" height="8" viewBox="0 0 10 6" fill="none">
                       <path d={showModels ? 'M1 5L5 1L9 5' : 'M1 1L5 5L9 1'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -1164,27 +1250,36 @@ export default function PromptBuilder() {
                     {targetModel && (
                       <>
                         <button
-                          className="w-full text-left px-2 py-1 text-[11px] text-white/35 hover:text-white/65 hover:bg-white/[0.08] rounded-md transition-colors cursor-default select-none"
+                          onMouseEnter={() => setModelHighlight(0)}
+                          className={`w-full text-left px-2 py-1 text-[11px] rounded-md transition-colors cursor-default select-none ${
+                            modelHighlight === 0 ? 'text-white/65 bg-white/[0.08]' : 'text-white/35 hover:text-white/65 hover:bg-white/[0.08]'
+                          }`}
                           onClick={() => { setTargetModel(null); setShowModels(false) }}
                         >
-                          Nenhum
+                          {t('promptBuilder.models.none')}
                         </button>
                         <div className="h-px bg-white/[0.06] mx-2 my-1" />
                       </>
                     )}
                     {MODEL_GROUPS.map((grp, gi) => (
-                      <div key={grp.group}>
+                      <div key={grp.groupKey}>
                         {gi > 0 && <div className="h-px bg-white/[0.06] mx-2 my-1" />}
                         <div className="px-2 pt-1 pb-0.5 text-[9px] font-bold uppercase tracking-widest text-white/25">
-                          {grp.group}
+                          {t(grp.groupKey)}
                         </div>
-                        {grp.models.map(m => (
+                        {grp.models.map(m => {
+                          const navIdx = modelNavIds.indexOf(m.id)
+                          const destacado = modelHighlight === navIdx
+                          return (
                           <button
                             key={m.id}
+                            onMouseEnter={() => setModelHighlight(navIdx)}
                             className={`w-full text-left px-2 py-1 text-[11px] rounded-md transition-colors cursor-default select-none flex items-center gap-1.5 ${
                               targetModel === m.id
                                 ? 'text-orange-300/80 bg-orange-500/[0.12]'
-                                : 'text-white/75 hover:text-white hover:bg-white/[0.08]'
+                                : destacado
+                                  ? 'text-white bg-white/[0.08]'
+                                  : 'text-white/75 hover:text-white hover:bg-white/[0.08]'
                             }`}
                             onClick={() => handleSelectModel(m.id)}
                           >
@@ -1195,7 +1290,8 @@ export default function PromptBuilder() {
                               </span>
                             )}
                           </button>
-                        ))}
+                          )
+                        })}
                       </div>
                     ))}
                   </div>,
@@ -1210,7 +1306,7 @@ export default function PromptBuilder() {
               {optimizing && (
                 <button
                   onClick={handleCancelarOtimizacao}
-                  title="Cancelar"
+                  title={t('promptBuilder.cancelOptimize')}
                   className="w-5 h-5 flex items-center justify-center rounded-md text-white/30 hover:text-white/70 hover:bg-white/[0.08] transition-colors"
                 >
                   <svg width="8" height="8" viewBox="0 0 10 10" fill="none">
@@ -1232,7 +1328,7 @@ export default function PromptBuilder() {
                   }}
                   className="whitespace-nowrap text-[11px] px-2 py-1 rounded-md text-white/45 hover:text-white/80 bg-white/[0.06] hover:bg-white/[0.12] transition-colors"
                 >
-                  {optRecovery === 'settings' ? 'Configurações' : 'Tentar de novo'}
+                  {optRecovery === 'settings' ? t('promptBuilder.openSettings') : t('common.retry')}
                 </button>
               )}
             </div>
@@ -1243,8 +1339,8 @@ export default function PromptBuilder() {
                 onClick={handleToggleFormat}
                 disabled={optimizing}
                 title={dualPrompt.showing === 'text'
-                  ? 'Reescrever este prompt como JSON estruturado'
-                  : 'Voltar para a versão em texto'}
+                  ? t('promptBuilder.json.toJson')
+                  : t('promptBuilder.json.toText')}
                 className={`text-[10px] font-bold tracking-wide px-2 py-0.5 rounded-md transition-colors shrink-0 ${
                   optimizing
                     ? 'text-white/20 cursor-default'
@@ -1252,15 +1348,18 @@ export default function PromptBuilder() {
                 }`}
                 style={{ border: '1px solid rgba(255,255,255,0.12)' }}
               >
-                {dualPrompt.showing === 'text' ? 'JSON' : 'TEXTO'}
+                {dualPrompt.showing === 'text' ? t('promptBuilder.json.badgeJson') : t('promptBuilder.json.badgeText')}
               </button>
             )}
             <MicButton hasCloudKey={hasOpenAIKey} onTranscript={text => setInputText(prev => prev ? prev + ' ' + text : text)} />
-            {hasContent && (
+            {/* Este botão existe para LER o prompt no seu idioma — o prompt em si
+                é sempre escrito em inglês, que é o que os modelos entendem. Com o
+                app em inglês não há o que traduzir, então ele some. */}
+            {hasContent && appLang === 'pt' && (
               <button
                 onClick={handleTranslatePrompt}
                 disabled={translatingPrompt}
-                title={translatingPrompt ? 'Traduzindo...' : promptTranslated ? 'Voltar para inglês' : 'Traduzir prompt para português'}
+                title={translatingPrompt ? t('promptBuilder.translate.working') : promptTranslated ? t('promptBuilder.translate.revert') : t('promptBuilder.translate.to')}
                 className={`text-[11px] px-2 py-0.5 rounded-md transition-colors shrink-0 inline-flex items-center gap-1 ${
                   translatingPrompt
                     ? 'text-white/30 cursor-default'
@@ -1283,16 +1382,16 @@ export default function PromptBuilder() {
                 onClick={handleClearAll}
                 className="text-[11px] text-white/30 hover:text-white/65 transition-colors px-2 py-0.5 rounded-md hover:bg-white/[0.06] shrink-0"
               >
-                Limpar
+                {t('promptBuilder.clear')}
               </button>
             )}
             {!hasContent && limpezaDesfazivel && (
               <button
                 onClick={handleDesfazerLimpeza}
-                title="Restaurar o prompt que você acabou de limpar"
+                title={t('promptBuilder.undoTooltip')}
                 className="text-[11px] text-white/30 hover:text-white/65 transition-colors px-2 py-0.5 rounded-md hover:bg-white/[0.06] shrink-0"
               >
-                Desfazer
+                {t('promptBuilder.undo')}
               </button>
             )}
             <button
@@ -1305,7 +1404,7 @@ export default function PromptBuilder() {
                     : 'hover:bg-white/[0.07]'
                   : 'opacity-25 cursor-not-allowed'
               }`}
-              title={copied ? 'Copiado!' : 'Copiar prompt'}
+              title={copied ? t('common.copied') : t('promptBuilder.copyTooltip')}
             >
               {copied ? (
                 <svg width="21" height="21" viewBox="0 0 24 24" fill="none">
@@ -1329,7 +1428,7 @@ export default function PromptBuilder() {
               <button
                 onClick={() => setShowHistory(s => !s)}
                 className={`p-2.5 rounded-lg transition-all shrink-0 hover:bg-white/[0.07] ${showHistory ? 'bg-white/[0.07]' : ''}`}
-                title="Histórico de prompts"
+                title={t('promptBuilder.historyTooltip')}
               >
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
                   <circle cx="12" cy="12" r="9" stroke="rgba(255,255,255,0.4)" strokeWidth="1.8"/>
@@ -1351,7 +1450,7 @@ export default function PromptBuilder() {
                 style={{ overflow: 'hidden' }}
               >
                 <div className="relative border-t border-white/[0.06] px-4 pt-3 pb-2 flex flex-col gap-1.5">
-                  <span className="text-[9px] uppercase tracking-widest text-white/25 font-semibold mb-1">Histórico</span>
+                  <span className="text-[9px] uppercase tracking-widest text-white/25 font-semibold mb-1">{t('promptBuilder.history')}</span>
                   <div className="flex flex-col gap-1.5 max-h-[60px] overflow-y-auto">
                     {history.map((h, i) => (
                       <button
@@ -1377,7 +1476,7 @@ export default function PromptBuilder() {
                           setHoverHistory({ idx: i, left, bottom: window.innerHeight - r.bottom })
                         }}
                         onMouseLeave={scheduleHistoryHide}
-                        title={h.source ? 'Clique: copiar · Botão direito: restaurar o prompt original' : 'Clique para copiar'}
+                        title={h.source ? t('promptBuilder.history.clickBoth') : t('promptBuilder.history.clickCopy')}
                         className="group flex items-center gap-2 text-left text-[11px] text-white/45 hover:text-white/75 hover:bg-white/[0.04] rounded-lg px-2 py-1 transition-colors shrink-0"
                       >
                         <span className="truncate flex-1 min-w-0">{h.text}</span>
@@ -1415,7 +1514,7 @@ export default function PromptBuilder() {
           </div>
           {history[hoverHistory.idx].source && (
             <div className="mt-2 pt-2 border-t border-white/[0.08]">
-              <div className="mb-1 text-[9px] uppercase tracking-widest font-semibold text-white/35">Original — botão direito p/ restaurar</div>
+              <div className="mb-1 text-[9px] uppercase tracking-widest font-semibold text-white/35">{t('promptBuilder.history.original')}</div>
               <div className="text-[11px] leading-relaxed text-white/50 whitespace-pre-wrap max-h-[140px] overflow-y-auto" data-scrollable>
                 {history[hoverHistory.idx].source}
               </div>

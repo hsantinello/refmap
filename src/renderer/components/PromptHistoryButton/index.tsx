@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useCanvasStore } from '../../store'
+import { useT } from '../../i18n'
 
 export default function PromptHistoryButton() {
+  const t = useT()
   const [open, setOpen] = useState(false)
   const [history, setHistory] = useState<string[]>([])
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
@@ -39,7 +41,7 @@ export default function PromptHistoryButton() {
     <>
       <button
         ref={btnRef}
-        title="Histórico de prompts"
+        title={t('promptHistory.title')}
         onClick={() => setOpen(v => !v)}
         className={`
           absolute top-[60px] right-3 z-20
@@ -60,14 +62,14 @@ export default function PromptHistoryButton() {
         >
           <div className="px-4 py-3 flex items-center justify-between border-b border-white/[0.06]">
             <span className="text-[12px] font-medium text-white/60 tracking-wide uppercase">
-              Histórico de prompts
+              {t('promptHistory.title')}
             </span>
             <span className="text-[11px] text-white/25">{history.length}/10</span>
           </div>
 
           {history.length === 0 ? (
             <div className="px-4 py-6 text-center text-[12px] text-white/25">
-              Nenhum prompt copiado ainda
+              {t('promptHistory.empty')}
             </div>
           ) : (
             <div className="max-h-[360px] overflow-y-auto flex flex-col">
@@ -81,7 +83,7 @@ export default function PromptHistoryButton() {
                     {prompt}
                   </span>
                   <span className={`shrink-0 text-[11px] mt-0.5 transition-colors ${copiedIdx === idx ? 'text-emerald-400' : 'text-white/20 group-hover:text-white/40'}`}>
-                    {copiedIdx === idx ? 'Copiado!' : 'Copiar'}
+                    {copiedIdx === idx ? t('common.copied') : t('common.copy')}
                   </span>
                 </button>
               ))}

@@ -1,6 +1,6 @@
 {
   "name": "refmap",
-  "version": "0.0.28",
+  "version": "0.0.29",
   "description": "Canvas flutuante de referências para criadores de IA",
   "main": "out/main/index.js",
   "author": "Ref Map",
@@ -14,6 +14,10 @@
     "dist:win:publish": "electron-vite build && dotenv -e .env -- electron-builder --win --publish always",
     "dist:mac": "npm run build && electron-builder --mac",
     "gen-license": "tsx scripts/generate-license.ts",
+    "typecheck": "tsc -p tsconfig.check-web.json && tsc -p tsconfig.check-node.json",
+    "typecheck:web": "tsc -p tsconfig.check-web.json",
+    "typecheck:node": "tsc -p tsconfig.check-node.json",
+    "check:i18n": "tsx scripts/check-i18n.ts",
     "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
   "build": {

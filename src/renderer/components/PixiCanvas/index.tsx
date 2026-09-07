@@ -9,6 +9,8 @@ import PromptPresets from '../PromptPresets'
 import VideoSceneImport from '../VideoSceneImport'
 import VideoTrimModal from '../VideoTrimModal'
 import { recordDuration, getEstimateSeconds } from '../../lib/estimate'
+import { useT } from '../../i18n'
+import type { I18nKey } from '../../../shared/i18n'
 
 // ─── busca: normalização + sinônimos/hiperônimos bilíngues (PT↔EN) ───────────
 // Compara sem acento e sem caixa ("cão" == "cao", "Gato" == "gato").
@@ -94,6 +96,8 @@ interface PixiNode {
 
 // ─── NSFW detection ───────────────────────────────────────────────────────────
 
+// i18n-ignore-start — lista de DETECÇÃO: casa contra o texto das tags, que pode
+// estar em português. Traduzir estas palavras quebraria o modo SFW.
 const NSFW_KEYWORDS = [
   'nsfw', '+18', '18+',
   'nude', 'nudity', 'naked', 'unclothed', 'undressed',
@@ -104,6 +108,7 @@ const NSFW_KEYWORDS = [
   'lingerie', 'uncensored',
   'nudez', 'seio', 'pele nua', 'conteúdo adulto', 'sexualmente explícito',
 ]
+// i18n-ignore-end
 
 // Palavras com símbolos/dígitos casam por substring; as demais por palavra
 // inteira (com acentos), para evitar falsos positivos como "breast" em
@@ -346,12 +351,12 @@ function groupTagsByCategory(tags: Tag[]): [string, Tag[]][] {
   return out
 }
 
-const SRC_BADGE: Record<string, { icon: string; label: string; cls: string } | null> = {
-  comfyui:    { icon: '🔗', label: 'ComfyUI',          cls: 'bg-emerald-500/15 text-emerald-300/80 border-emerald-500/25' },
-  a1111:      { icon: '🔗', label: 'Automatic1111',    cls: 'bg-emerald-500/15 text-emerald-300/80 border-emerald-500/25' },
-  midjourney: { icon: '🔗', label: 'Midjourney',       cls: 'bg-sky-500/15 text-sky-300/80 border-sky-500/25' },
-  ai:         { icon: '✨', label: 'Analisado por IA', cls: 'bg-orange-500/15 text-orange-300/80 border-orange-500/25' },
-  none:       { icon: '?',  label: 'Não Identificado', cls: 'bg-white/[0.05] text-white/35 border-white/[0.08]' },
+const SRC_BADGE: Record<string, { icon: string; labelKey: I18nKey; cls: string } | null> = {
+  comfyui:    { icon: '🔗', labelKey: 'canvas.badge.comfyui',          cls: 'bg-emerald-500/15 text-emerald-300/80 border-emerald-500/25' },
+  a1111:      { icon: '🔗', labelKey: 'canvas.badge.a1111',    cls: 'bg-emerald-500/15 text-emerald-300/80 border-emerald-500/25' },
+  midjourney: { icon: '🔗', labelKey: 'canvas.badge.midjourney',       cls: 'bg-sky-500/15 text-sky-300/80 border-sky-500/25' },
+  ai:         { icon: '✨', labelKey: 'canvas.badge.ai',   cls: 'bg-orange-500/15 text-orange-300/80 border-orange-500/25' },
+  none:       { icon: '?',  labelKey: 'canvas.badge.none', cls: 'bg-white/[0.05] text-white/35 border-white/[0.08]' },
 }
 
 function extractDominantColors(imagePath: string, count = 6): Promise<string[]> {
@@ -385,6 +390,7 @@ function extractDominantColors(imagePath: string, count = 6): Promise<string[]> 
 }
 
 function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
+  const t = useT()
   const promptTags = usePromptStore(s => s.promptTags)
   const toggleTag  = usePromptStore(s => s.toggleTag)
   const addTag     = usePromptStore(s => s.addTag)
@@ -556,7 +562,7 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
               onMouseEnter={e => hasPreview && showTagPreview(tag.value, e.currentTarget)}
               onMouseLeave={scheduleHoverHide}
               className={`rm-chip ${active ? 'is-active' : ''} ${hasPreview ? 'inline-flex items-center gap-1' : ''}`}
-              title={hasPreview ? 'Passe o mouse para ver o exemplo' : (active ? 'Remover do builder' : 'Adicionar ao builder')}
+              title={hasPreview ? t('canvas.tag.previewTooltip') : (active ? t('canvas.tag.removeFromBuilder') : t('canvas.tag.addToBuilder'))}
             >
               {hasPreview && (
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" className="shrink-0 opacity-60">
@@ -589,11 +595,11 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
               )
             }}
             disabled={data.isPending}
-            title="Reanalisar com IA"
+            title={t('canvas.reanalyze')}
             className={`min-w-0 overflow-hidden inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 border whitespace-nowrap transition-all hover:brightness-125 disabled:opacity-50 disabled:cursor-default cursor-pointer ${badge.cls}`}
           >
             <span className="text-[10px] leading-none shrink-0">{badge.icon}</span>
-            <span className="text-[10px] font-medium leading-none truncate">{badge.label}</span>
+            <span className="text-[10px] font-medium leading-none truncate">{t(badge.labelKey)}</span>
           </button>
         ) : <div className="min-w-0 flex-1" />}
         <div className="flex items-center gap-1 shrink-0">
@@ -602,7 +608,7 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
               <button
                 onClick={handleTranslate}
                 disabled={translating}
-                title={translating ? 'Traduzindo...' : `Mostrar em ${switchToLang === 'pt' ? 'português' : 'inglês'}`}
+                title={translating ? t('canvas.translating') : t('canvas.showIn', { lang: t(switchToLang === 'pt' ? 'canvas.lang.pt' : 'canvas.lang.en') })}
                 className={`text-[10px] px-1.5 py-0.5 rounded-md border transition-colors inline-flex items-center gap-1 ${
                   translating
                     ? 'text-white/30 border-white/[0.08] cursor-default bg-white/[0.04]'
@@ -621,18 +627,18 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
               </button>
               <button
                 onClick={handleAddAll}
-                title="Adicionar todas as tags ao builder"
+                title={t('canvas.tag.addAll')}
                 className={`text-[10px] px-1.5 py-0.5 rounded-md border transition-colors ${
                   allAdded
                     ? 'text-orange-300/70 border-orange-500/25 bg-orange-500/[0.08]'
                     : 'text-white/25 border-white/[0.06]'
                 }`}
               >
-                + todas
+                {t('canvas.tag.addAllShort')}
               </button>
               <button
                 onClick={handleCopyTags}
-                title={copiedTags ? 'Copiado!' : 'Copiar todas as tags'}
+                title={copiedTags ? t('common.copied') : t('canvas.tag.copyAll')}
                 className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-white/[0.07] transition-colors"
               >
                 {copiedTags ? (
@@ -650,7 +656,7 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
           )}
           <button
             onClick={handleStar}
-          title={data.starred ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
+          title={data.starred ? t('canvas.star.remove') : t('canvas.star.add')}
           className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-white/[0.07] transition-colors"
         >
           <svg width="13" height="13" viewBox="0 0 14 14" fill={data.starred ? '#FBBF24' : 'none'}>
@@ -662,7 +668,7 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
       </div>
       {data.isPending && (
         <div className="text-xs text-white/35 flex items-center gap-2">
-          <span className="animate-spin inline-block">⏳</span><span>Analisando...</span>
+          <span className="animate-spin inline-block">⏳</span><span>{t('canvas.analyzing')}</span>
         </div>
       )}
       {data.isError && (
@@ -677,18 +683,18 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
           }}
           className="text-xs text-red-400/70 bg-red-500/10 rounded-lg px-2 py-1.5 border border-red-500/15 hover:bg-red-500/20 hover:text-red-400 transition-colors text-left cursor-pointer"
         >
-          Falha na análise — clique para tentar novamente
+          {t('canvas.analyzeFailed')}
         </button>
       )}
 
       {palette.length > 0 && (
         <div className="flex flex-col gap-1">
-          <span className="text-[9px] uppercase tracking-widest text-white/25 font-semibold leading-none">Paleta</span>
+          <span className="text-[9px] uppercase tracking-widest text-white/25 font-semibold leading-none">{t('canvas.palette')}</span>
           <div className="flex gap-1.5 flex-wrap">
             {palette.map(color => (
               <button
                 key={color}
-                title={copiedColor === color ? 'Copiado!' : color}
+                title={copiedColor === color ? t('common.copied') : color}
                 onClick={() => { navigator.clipboard.writeText(color); setCopiedColor(color); setTimeout(() => setCopiedColor(null), 1500) }}
                 className="w-6 h-6 rounded-md border border-white/10 hover:scale-110 transition-transform relative"
                 style={{ background: color }}
@@ -707,7 +713,7 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
         {mixed && (
           <div className="flex flex-col gap-1.5 pt-1.5 mt-0.5 border-t border-white/[0.08]">
             <span className="inline-flex items-center gap-1 text-[9px] uppercase tracking-widest text-orange-300/60 font-semibold leading-none">
-              <span className="text-[10px]">✨</span><span>Analisado por IA</span>
+              <span className="text-[10px]">✨</span><span>{t('canvas.badge.ai')}</span>
             </span>
             {aiGroups.map(renderGroup)}
           </div>
@@ -737,10 +743,11 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
 function CanvasToolbar({ zoom, onZoomIn, onZoomOut, onFit }: {
   zoom: number; onZoomIn: () => void; onZoomOut: () => void; onFit: () => void
 }) {
+  const t = useT()
   const b = 'w-9 h-9 flex items-center justify-center rounded-lg transition-all text-white/40 hover:text-white/80 hover:bg-white/[0.08]'
   return (
     <div className="absolute top-3 right-3 z-10 flex items-center gap-0.5 px-1.5 py-1.5 rm-panel !border-transparent rounded-xl">
-      <button onClick={onFit} title="Centralizar" className={b}>
+      <button onClick={onFit} title={t('canvas.fit')} className={b}>
         <svg width="15" height="15" viewBox="0 0 14 14" fill="none">
           <path d="M1 4V1H4M10 1H13V4M13 10V13H10M4 13H1V10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
         </svg>
@@ -756,6 +763,7 @@ function CanvasToolbar({ zoom, onZoomIn, onZoomOut, onFit }: {
 // ─── metadata node view ───────────────────────────────────────────────────────
 
 function MetadataNodeView({ data, selected }: { data: ImageNodeData; selected: boolean }) {
+  const t = useT()
   const p = (data.comfyParams ?? {}) as ComfyParams
   // Card de PROMPT DE ANIMAÇÃO (entre duas imagens first/last) — texto livre.
   const promptText = (data.comfyParams as { _promptText?: string } | undefined)?._promptText
@@ -769,11 +777,11 @@ function MetadataNodeView({ data, selected }: { data: ImageNodeData; selected: b
       }}>
         <div className="flex items-center gap-2 px-3.5 py-2.5" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#F97316" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg>
-          <span className="text-[9px] font-bold tracking-widest uppercase text-white/30">Prompt de animação</span>
+          <span className="text-[9px] font-bold tracking-widest uppercase text-white/30">{t('canvas.animPrompt.title')}</span>
           <button
             onClick={() => navigator.clipboard.writeText(promptText)}
             className="ml-auto text-[9px] uppercase tracking-wider text-white/30 hover:text-orange-400 transition-colors cursor-pointer"
-          >copiar</button>
+          >{t('common.copy')}</button>
         </div>
         <div className="px-3.5 py-3 text-[11px] text-white/70 leading-relaxed max-h-[220px] overflow-y-auto whitespace-pre-wrap" data-scrollable>{promptText}</div>
       </div>
@@ -796,7 +804,7 @@ function MetadataNodeView({ data, selected }: { data: ImageNodeData; selected: b
       </div>
       {hasModels && (
         <div className="px-3.5 py-2.5" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-          <div className="text-[8px] font-bold tracking-widest uppercase text-white/20 mb-2">Modelos</div>
+          <div className="text-[8px] font-bold tracking-widest uppercase text-white/20 mb-2">{t('canvas.meta.models')}</div>
           {baseName && (
             <div className="flex items-center gap-2 mb-1.5">
               <span className="text-[11px] text-white/65 font-medium truncate flex-1">{baseName}</span>
@@ -821,7 +829,7 @@ function MetadataNodeView({ data, selected }: { data: ImageNodeData; selected: b
             p.steps    !== undefined && ['Steps',    String(p.steps)],
             typeof p.denoise === 'number' && ['Denoise',  p.denoise.toFixed(2)],
             (p.guidance !== undefined || p.cfg !== undefined) && ['Guidance', String(p.guidance ?? p.cfg)],
-            p.width !== undefined && p.height !== undefined && ['Resolução', `${p.width} × ${p.height}`],
+            p.width !== undefined && p.height !== undefined && [t('canvas.meta.resolution'), `${p.width} × ${p.height}`],
             p.seed !== undefined && ['Seed', String(p.seed)],
           ] as (string[] | false)[]).filter(Boolean).map(([label, value]) => (
             <div key={label} className="flex items-baseline justify-between gap-3 py-[3px]">
@@ -831,7 +839,7 @@ function MetadataNodeView({ data, selected }: { data: ImageNodeData; selected: b
           ))}
         </div>
       )}
-      {!hasModels && !hasSampling && <div className="px-3.5 py-4 text-center text-[10px] text-white/20">A imagem não possui metadados</div>}
+      {!hasModels && !hasSampling && <div className="px-3.5 py-4 text-center text-[10px] text-white/20">{t('canvas.meta.none')}</div>}
     </div>
   )
 }
@@ -839,6 +847,7 @@ function MetadataNodeView({ data, selected }: { data: ImageNodeData; selected: b
 // ─── main component ───────────────────────────────────────────────────────────
 
 export default function PixiCanvas({ canvasId }: { canvasId: string }) {
+  const t = useT()
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasElRef  = useRef<HTMLCanvasElement>(null)
   const bgDotsRef    = useRef<HTMLDivElement>(null)  // dot pattern, moves with world
@@ -1908,7 +1917,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     setEditingGroupId(null)
     const trimmed = newLabel.trim()
     if (!trimmed) return
-    const prevLabel = nodesRef.current.get(groupId)?.data.label ?? 'Grupo'
+    const prevLabel = nodesRef.current.get(groupId)?.data.label ?? t('canvas.group.defaultLabel')
     const applyLabel = (lbl: string) => {
       useCanvasStore.getState().setNodes(
         useCanvasStore.getState().nodes.map(n =>
@@ -3419,14 +3428,14 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       const res = await window.api.extractVideoScenes(videoPath, { threshold, maxScenes: 60, start, end, maxGap })
       if (!res.frames.length) {
         setVideoScenes(null)
-        setVideoError('Nenhuma cena detectada nesse trecho. Tente "+ mais cenas" ou amplie a seleção.')
+        setVideoError(t('canvas.video.noScenes'))
         return
       }
       setVideoScenes({ videoPath, name, screenPos, frames: res.frames, capped: res.capped, threshold, start, end })
     } catch (err) {
       console.error('[video] extração falhou:', err)
       setVideoScenes(null)
-      setVideoError('Não consegui processar esse vídeo.')
+      setVideoError(t('canvas.video.failed'))
     } finally {
       setVideoExtracting(null)
     }
@@ -3434,7 +3443,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
   // Vídeo importado → abre o editor de trim antes de extrair as cenas.
   const handleVideoDrop = useCallback((videoPath: string, screenPos: { x: number; y: number }) => {
-    const name = (videoPath.split(/[\\/]/).pop() ?? 'vídeo').replace(/\.[^.]+$/, '') // sem extensão
+    const name = (videoPath.split(/[\\/]/).pop() ?? t('canvas.video.fallbackName')).replace(/\.[^.]+$/, '') // sem extensão
     setVideoTrim({ videoPath, name, screenPos })
   }, [])
 
@@ -3448,7 +3457,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   const handleConfirmScenes = useCallback((paths: string[]) => {
     const pos = videoScenes?.screenPos
     setVideoScenes(null)
-    if (paths.length > 0) addVideoNode(paths, videoScenes?.name ?? 'vídeo', pos) // agrupa as cenas num nó de vídeo
+    if (paths.length > 0) addVideoNode(paths, videoScenes?.name ?? t('canvas.video.fallbackName'), pos) // agrupa as cenas num nó de vídeo
   }, [videoScenes, addVideoNode])
 
   // Expande o nó de vídeo: remove o nó e joga TODAS as cenas no canvas, já agrupadas
@@ -3458,7 +3467,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     const scenes = node?.data.videoScenes
     if (!node || !scenes?.length) return
     const worldStart = { x: node.position.x, y: node.position.y }
-    const name = node.data.videoName ?? 'Vídeo'
+    const name = node.data.videoName ?? t('canvas.video.fallbackName')
     removePixiNode(nodeId)
     removeNode(nodeId)
     window.api.deleteNode(nodeId).catch(() => {})
@@ -3582,7 +3591,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
       // Manda pro Prompt Builder (numera as transições quando há mais de uma).
       const combined = prompts.length > 1
-        ? prompts.map((p, i) => `# Transição ${i + 1} → ${i + 2}\n${p}`).join('\n\n')
+        ? prompts.map((p, i) => `# ${t('canvas.anim.transitionHeader', { from: i + 1, to: i + 2 })}\n${p}`).join('\n\n')
         : prompts[0]
       window.dispatchEvent(new CustomEvent('set-prompt-text', { detail: { text: combined } }))
       flashSave()
@@ -3615,13 +3624,12 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     return (
       <div className="flex-1 min-h-0 relative bg-black rounded-[16px] overflow-hidden flex items-center justify-center">
         <div className="text-sm text-center px-8 max-w-md">
-          <div className="text-red-400/90 font-medium mb-1">Não foi possível iniciar o canvas</div>
+          <div className="text-red-400/90 font-medium mb-1">{t('canvas.init.failed')}</div>
           <div className="text-white/55 text-xs leading-relaxed">
-            O app não conseguiu usar a placa de vídeo para desenhar o canvas.
+            {t('canvas.init.reason')}
           </div>
           <div className="text-white/40 text-xs leading-relaxed mt-2">
-            Atualize o driver da placa de vídeo e reinicie o app. Se você usa acesso remoto
-            ou uma máquina virtual, a aceleração gráfica pode estar desativada.
+            {t('canvas.init.advice')}
           </div>
           {/* Detalhe técnico fica discreto, para suporte — não é o que o usuário lê primeiro. */}
           <div className="text-white/20 text-[10px] font-mono mt-3 break-all">{initError}</div>
@@ -3661,7 +3669,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           <button
             onClick={handleAnimatePrompt}
             disabled={animatePrompting}
-            title="Gera prompts de movimento entre as imagens em sequência (workflow first/last frame)"
+            title={t('canvas.anim.tooltip')}
             className="flex items-center gap-2 px-3.5 py-2 rounded-full text-[12px] font-medium text-white transition-all hover:brightness-110 disabled:opacity-70 cursor-pointer"
             style={{ background: 'linear-gradient(135deg, #8f0e2e, #F97316)', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}
           >
@@ -3676,8 +3684,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
               </svg>
             )}
             {animatePrompting
-              ? 'Gerando prompt de animação…'
-              : `Prompt entre imagens${selectedImageCount > 2 ? ` · ${selectedImageCount - 1} transições` : ''}`}
+              ? t('canvas.anim.generating')
+              : `${t('canvas.anim.button')}${selectedImageCount > 2 ? t('canvas.anim.transitions', { count: selectedImageCount - 1 }) : ''}`}
           </button>
         </div>
       )}
@@ -3777,10 +3785,10 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
                   onDoubleClick={e => {
                     e.stopPropagation()
                     setEditingGroupId(n.id)
-                    setEditingLabel(n.data.label ?? 'Grupo')
+                    setEditingLabel(n.data.label ?? t('canvas.group.defaultLabel'))
                   }}
                 >
-                  {n.data.label ?? 'Grupo'}
+                  {n.data.label ?? t('canvas.group.defaultLabel')}
                 </span>
               )}
 
@@ -3813,7 +3821,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
                   <button
                     onClick={() => { deleteGroup(n.id); setContextMenu(null) }}
                     className="w-3.5 h-3.5 flex items-center justify-center text-white/30 hover:text-red-400/80 transition-colors"
-                    title="Excluir grupo"
+                    title={t('canvas.group.delete')}
                   >
                     <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
                       <path d="M2 2.5h6M4 2.5V2a.5.5 0 011 0v.5M3.5 2.5v5a.5.5 0 00.5.5h2a.5.5 0 00.5-.5v-5" stroke="currentColor" strokeWidth="1" strokeLinecap="round"/>
@@ -3857,7 +3865,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       <div ref={videoBadgeRef} className="absolute inset-0 pointer-events-none overflow-hidden">
         {videoNodeIds.map(id => (
           <div key={id} data-video-id={id} className="absolute pointer-events-auto" style={{ left: 0, top: 0, display: 'none' }}
-            title="Ver cenas do vídeo"
+            title={t('canvas.video.viewScenes')}
             onPointerDown={e => e.stopPropagation()}
             onClick={e => { e.stopPropagation(); expandVideoToGroup(id) }}>
             <div className="flex items-center justify-center rounded-md cursor-pointer transition-transform hover:scale-110" style={{ width: 24, height: 24, background: 'linear-gradient(135deg, #8f0e2e, #F97316)', boxShadow: '0 2px 10px rgba(0,0,0,0.5)' }}>
@@ -3873,7 +3881,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       <div ref={copyBtnRef} className="absolute inset-0 pointer-events-none overflow-hidden">
         {primaryId && primaryType === 'imageNode' && (
           <div data-copy-id={primaryId} className="absolute pointer-events-auto" style={{ left: 0, top: 0, display: 'none' }}
-            title="Copiar imagem"
+            title={t('canvas.copyImage')}
             onPointerDown={e => e.stopPropagation()}
             onClick={e => { e.stopPropagation(); handleCopyImage(primaryId) }}>
             <div
@@ -3906,18 +3914,18 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           </div>
           <div className="absolute top-1 left-1/2 -translate-x-1/2 flex items-center gap-1.5 text-[10px] text-orange-400/70">
             <span>
-              Analisando {analysisProgress.done}/{analysisProgress.total}
+              {t('canvas.analysis.progress', { done: analysisProgress.done, total: analysisProgress.total })}
               {analyzeEstSec
                 ? (analyzeEstSec * analysisProgress.total - analyzeElapsed > 0
-                    ? ` · restam ~${analyzeEstSec * analysisProgress.total - analyzeElapsed}s`
-                    : ' · finalizando…')
+                    ? t('canvas.analysis.remaining', { sec: analyzeEstSec * analysisProgress.total - analyzeElapsed })
+                    : t('canvas.analysis.finishing'))
                 : ''}
             </span>
             {/* A barra é pointer-events-none para não roubar cliques do canvas;
                 o botão precisa reativar isso em si mesmo. */}
             <button
               onClick={cancelarAnalise}
-              title="Cancelar a análise"
+              title={t('canvas.analysis.cancel')}
               className="pointer-events-auto w-4 h-4 flex items-center justify-center rounded text-orange-400/50 hover:text-orange-300 hover:bg-orange-400/15 transition-colors"
             >
               <svg width="7" height="7" viewBox="0 0 10 10" fill="none">
@@ -3944,8 +3952,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
               </svg>
             </div>
             <div className="flex flex-col items-center gap-1">
-              <span className="text-[13px] font-medium text-white/25 group-hover:text-white/50 transition-colors duration-200">Importar imagens</span>
-              <span className="text-[11px] text-white/15 group-hover:text-white/30 transition-colors duration-200">ou arraste arquivos aqui</span>
+              <span className="text-[13px] font-medium text-white/25 group-hover:text-white/50 transition-colors duration-200">{t('canvas.empty.import')}</span>
+              <span className="text-[11px] text-white/15 group-hover:text-white/30 transition-colors duration-200">{t('canvas.empty.drag')}</span>
             </div>
           </button>
         </div>
@@ -3956,8 +3964,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         <div className="absolute bottom-3 left-3 z-10 flex items-center gap-1.5 px-2.5 py-1 rm-panel !border-transparent rounded-lg text-[11px]"
           style={{ backdropFilter: 'blur(8px)' }}>
           {saveStatus === 'saving'
-            ? <><span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" /><span className="text-white/40">Salvando…</span></>
-            : <><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /><span className="text-white/40">Salvo</span></>
+            ? <><span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" /><span className="text-white/40">{t('canvas.saving')}</span></>
+            : <><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /><span className="text-white/40">{t('canvas.saved')}</span></>
           }
         </div>
       )}
@@ -3967,7 +3975,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         <div
           className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] cursor-pointer select-none transition-all rm-panel !border-transparent ${snapEnabled ? 'text-orange-400/70' : 'text-white/25'}`}
           onClick={() => { const next = !snapEnabledRef.current; snapEnabledRef.current = next; setSnapEnabled(next) }}
-          title={snapEnabled ? 'Snap ativo (S para desativar)' : 'Snap inativo (S para ativar)'}
+          title={snapEnabled ? t('canvas.snap.on') : t('canvas.snap.off')}
         >
           <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
             <path d="M2 6h8M6 2v8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
@@ -3995,12 +4003,12 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
               else if (e.key === 'ArrowUp')   { e.preventDefault(); goToMatch(-1) }
               else if (e.key === 'Escape')    { e.preventDefault(); applySearch(''); clearAllSelection(); searchInputRef.current?.blur() }
             }}
-            placeholder="Buscar (Ctrl+F)…"
+            placeholder={t('canvas.search')}
             className="bg-transparent outline-none text-[12px] text-white/60 placeholder-white/20 w-36"
           />
           {searchQuery && (
             <span className="text-[10px] text-white/30 tabular-nums shrink-0">
-              {searchTotal === 0 ? 'nenhum' : (searchPos > 0 ? `${searchPos}/${searchTotal}` : `${searchTotal}`)}
+              {searchTotal === 0 ? t('canvas.search.noMatch') : (searchPos > 0 ? `${searchPos}/${searchTotal}` : `${searchTotal}`)}
             </span>
           )}
           {searchQuery && (
@@ -4021,7 +4029,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
                 node.container.alpha = !next || isStarred ? 1 : 0.12
               }
             }}
-            title={starFilter ? 'Mostrar todas' : 'Mostrar só favoritos'}
+            title={starFilter ? t('canvas.filter.all') : t('canvas.filter.starred')}
             className={`transition-colors ${starFilter ? 'text-yellow-400' : 'text-white/25 hover:text-white/50'}`}
           >
             <svg width="12" height="12" viewBox="0 0 14 14" fill={starFilter ? '#FBBF24' : 'none'}>
@@ -4085,14 +4093,14 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             const item = 'flex items-center gap-2 px-3 py-1.5 text-[13px] text-white/75 hover:bg-white/[0.08] hover:text-white rounded-md cursor-default transition-colors select-none w-full text-left'
             return <>
               <button className={item} onClick={() => { addToGroup(); setContextMenu(null) }}>
-                <span>Criar novo grupo</span>
+                <span>{t('canvas.menu.newGroup')}</span>
                 {selIdsRef.current.size >= 2
-                  ? <span className="ml-auto text-white/25 text-[11px]">{selIdsRef.current.size} selecionados</span>
-                  : <span className="ml-auto text-white/20 text-[11px]">selecione 2+</span>
+                  ? <span className="ml-auto text-white/25 text-[11px]">{t('canvas.menu.selectedCount', { count: selIdsRef.current.size })}</span>
+                  : <span className="ml-auto text-white/20 text-[11px]">{t('canvas.menu.needTwo')}</span>
                 }
               </button>
               <button className={item} onClick={() => { organizeAll(); setContextMenu(null) }}>
-                <span>Organizar tudo em grade</span>
+                <span>{t('canvas.menu.organizeAll')}</span>
               </button>
             </>
           })()}
@@ -4115,10 +4123,10 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
               const isAnalyzable = !!(ctxNodeData?.imagePath && !ctxNodeData?.isGroup)
               const metaSrc = ctxNodeData?.metadataSource
               const reanalyzeLabel = metaSrc === 'ai'
-                ? 'Reanalisar com IA'
+                ? t('canvas.reanalyze')
                 : (metaSrc === 'comfyui' || metaSrc === 'a1111' || metaSrc === 'midjourney')
-                  ? 'Recarregar metadados'
-                  : 'Analisar com IA'
+                  ? t('canvas.reloadMetadata')
+                  : t('canvas.analyzeWithAi')
               const handleReanalyze = () => {
                 if (!contextMenu.nodeId || !ctxNodeData?.imagePath) return
                 window.dispatchEvent(new CustomEvent('retry-analysis', { detail: { nodeId: contextMenu.nodeId, imagePath: ctxNodeData.imagePath } }))
@@ -4138,36 +4146,36 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
                   </>
                 )}
                 <button className={item} onClick={() => { organizeNodes('grid'); setContextMenu(null) }}>
-                  <span>Organizar em grade</span>
-                  {!multi && <span className="ml-auto text-white/20 text-[11px]">selecione 2+</span>}
+                  <span>{t('canvas.menu.organizeGrid')}</span>
+                  {!multi && <span className="ml-auto text-white/20 text-[11px]">{t('canvas.menu.needTwo')}</span>}
                 </button>
                 <button className={item} onClick={() => { organizeNodes('row'); setContextMenu(null) }}>
-                  <span>Organizar em linha</span>
-                  {!multi && <span className="ml-auto text-white/20 text-[11px]">selecione 2+</span>}
+                  <span>{t('canvas.menu.organizeRow')}</span>
+                  {!multi && <span className="ml-auto text-white/20 text-[11px]">{t('canvas.menu.needTwo')}</span>}
                 </button>
                 <button className={item} onClick={() => { organizeNodes('column'); setContextMenu(null) }}>
-                  <span>Organizar em coluna</span>
-                  {!multi && <span className="ml-auto text-white/20 text-[11px]">selecione 2+</span>}
+                  <span>{t('canvas.menu.organizeColumn')}</span>
+                  {!multi && <span className="ml-auto text-white/20 text-[11px]">{t('canvas.menu.needTwo')}</span>}
                 </button>
                 <div className="h-px bg-white/[0.07] mx-2 my-1" />
                 <button className={item} onClick={() => { addToGroup(); setContextMenu(null) }}>
-                  <span>Adicionar ao grupo</span>
-                  {!multi && <span className="ml-auto text-white/20 text-[11px]">selecione 2+</span>}
+                  <span>{t('canvas.menu.addToGroup')}</span>
+                  {!multi && <span className="ml-auto text-white/20 text-[11px]">{t('canvas.menu.needTwo')}</span>}
                 </button>
                 <div className="h-px bg-white/[0.07] mx-2 my-1" />
                 <button className={item} onClick={() => { selIdsRef.current.forEach(id => { const n = nodesRef.current.get(id); if (n?.container && worldRef.current) { worldRef.current.removeChild(n.container); worldRef.current.addChild(n.container) } }); setContextMenu(null) }}>
-                  <span>Trazer para frente</span>
+                  <span>{t('canvas.menu.bringFront')}</span>
                 </button>
                 <button className={item} onClick={() => { selIdsRef.current.forEach(id => { const n = nodesRef.current.get(id); if (n?.container && worldRef.current) { worldRef.current.removeChild(n.container); worldRef.current.addChildAt(n.container, 0) } }); setContextMenu(null) }}>
-                  <span>Mandar para trás</span>
+                  <span>{t('canvas.menu.sendBack')}</span>
                 </button>
                 <div className="h-px bg-white/[0.07] mx-2 my-1" />
                 <button
                   className={`${item} text-red-400/80 hover:text-red-400 hover:bg-red-500/[0.08]`}
                   onClick={() => { deleteSelected(); setContextMenu(null) }}
                 >
-                  <span>Deletar</span>
-                  {multi && <span className="ml-auto text-white/20 text-[11px]">{selIdsRef.current.size} itens</span>}
+                  <span>{t('canvas.menu.delete')}</span>
+                  {multi && <span className="ml-auto text-white/20 text-[11px]">{t('canvas.menu.itemCount', { count: selIdsRef.current.size })}</span>}
                 </button>
               </>
             })()}
@@ -4183,41 +4191,41 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           <div data-scrollable className="bg-[#111111] border border-white/[0.08] rounded-2xl shadow-2xl p-6 w-[480px] max-h-[80vh] overflow-y-auto"
             onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
-              <span className="text-white/80 font-semibold text-sm">Atalhos de teclado</span>
+              <span className="text-white/80 font-semibold text-sm">{t('shortcuts.title')}</span>
               <button onClick={() => setShowShortcuts(false)} className="text-white/30 hover:text-white/70 text-lg">✕</button>
             </div>
             {[
-              ['Canvas', [
-                ['Scroll / 2 dedos', 'Zoom in/out'],
-                ['Arrastar (espaço vazio) / Botão do meio', 'Pan'],
-                ['Duplo clique', 'Zoom na imagem'],
+              [t('shortcuts.section.canvas'), [
+                [t('shortcuts.key.scroll'), t('shortcuts.act.zoom')],
+                [t('shortcuts.key.dragEmpty'), t('shortcuts.act.pan')],
+                [t('shortcuts.key.doubleClick'), t('shortcuts.act.zoomImage')],
               ]],
-              ['Seleção', [
-                ['Clique', 'Selecionar imagem'],
-                ['Ctrl + Clique', 'Multi-seleção'],
-                ['Ctrl + Arrastar', 'Seleção por área'],
-                ['Clique em espaço vazio', 'Desselecionar'],
+              [t('shortcuts.section.selection'), [
+                [t('shortcuts.key.click'), t('shortcuts.act.selectImage')],
+                [t('shortcuts.key.ctrlClick'), t('shortcuts.act.multiSelect')],
+                [t('shortcuts.key.ctrlDrag'), t('shortcuts.act.boxSelect')],
+                [t('shortcuts.key.clickEmpty'), t('shortcuts.act.deselect')],
               ]],
-              ['Edição', [
-                ['Ctrl+Z', 'Desfazer'],
-                ['Ctrl+Y / Ctrl+Shift+Z', 'Refazer'],
-                ['Ctrl+C', 'Copiar'],
-                ['Ctrl+V', 'Colar'],
-                ['Ctrl+D', 'Duplicar'],
-                ['Delete / Backspace', 'Deletar'],
-                ['L', 'Travar / Destravar'],
-                [']', 'Trazer para frente'],
-                ['[', 'Mandar para trás'],
+              [t('shortcuts.section.editing'), [
+                ['Ctrl+Z', t('shortcuts.act.undo')],
+                ['Ctrl+Y / Ctrl+Shift+Z', t('shortcuts.act.redo')],
+                ['Ctrl+C', t('shortcuts.act.copy')],
+                ['Ctrl+V', t('shortcuts.act.paste')],
+                ['Ctrl+D', t('shortcuts.act.duplicate')],
+                ['Delete / Backspace', t('shortcuts.act.delete')],
+                ['L', t('shortcuts.act.lock')],
+                [']', t('shortcuts.act.bringFront')],
+                ['[', t('shortcuts.act.sendBack')],
               ]],
-              ['Arquivo', [
-                ['Ctrl+S', 'Salvar'],
-                ['Ctrl+Shift+S', 'Salvar como'],
+              [t('shortcuts.section.file'), [
+                ['Ctrl+S', t('shortcuts.act.save')],
+                ['Ctrl+Shift+S', t('shortcuts.act.saveAs')],
               ]],
-              ['Interface', [
-                ['?', 'Mostrar/ocultar atalhos'],
-                ['M', 'Mostrar/ocultar minimap'],
-                ['S', 'Ativar/desativar snap'],
-                ['Escape', 'Fechar painéis'],
+              [t('shortcuts.section.ui'), [
+                ['?', t('shortcuts.act.toggleShortcuts')],
+                ['M', t('shortcuts.act.toggleMinimap')],
+                ['S', t('shortcuts.act.toggleSnap')],
+                ['Escape', t('shortcuts.act.closePanels')],
               ]],
             ].map(([section, shortcuts]) => (
               <div key={section as string} className="mb-4">
@@ -4242,7 +4250,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
               <circle cx="12" cy="12" r="9" stroke="rgba(255,255,255,0.15)" strokeWidth="3" />
               <path d="M12 3a9 9 0 0 1 9 9" stroke="#F97316" strokeWidth="3" strokeLinecap="round" />
             </svg>
-            <div className="text-[12px] text-white/70">Detectando cenas…</div>
+            <div className="text-[12px] text-white/70">{t('canvas.video.detecting')}</div>
             <div className="text-[11px] text-white/35 max-w-[240px] truncate">{videoExtracting}</div>
           </div>
         </div>

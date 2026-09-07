@@ -1,3 +1,5 @@
+import { t, type I18nKey } from '../i18n'
+
 // Tradutor central de erros técnicos → mensagem que o usuário entende.
 //
 // Regra da casa: NENHUM erro cru ("spawn EBUSY", "HTTP 429", "ECONNREFUSED")
@@ -43,132 +45,137 @@ function cleanTechnical(raw: string): string {
     .trim()
 }
 
-type Rule = { test: RegExp; message: string; action?: string; recovery: Recovery }
+// As regras guardam CHAVES, não texto. A tradução acontece em `friendlyError()`,
+// no momento da chamada — assim nenhum ponto que exibe erro precisou mudar.
+type Rule = { test: RegExp; messageKey: I18nKey; actionKey?: I18nKey; recovery: Recovery }
 
 // ORDEM IMPORTA: do mais específico para o mais genérico. "connection", por
 // exemplo, casaria com vários casos acima se viesse antes deles.
+//
+// Os `test` continuam casando texto CRU do sistema/SDK (inglês, mais alguns
+// resquícios em português vindos do nosso próprio main) — isso não é interface
+// e não muda com o idioma.
 const RULES: Rule[] = [
   // ── IA local (Ollama) ────────────────────────────────────────────────────
   {
     test: /LOCAL_AI_UNAVAILABLE/i,
     recovery: 'settings',
-    message: 'A IA local não está rodando no seu computador.',
-    action: 'Abra as Configurações e clique em "Baixar IA Local" — ou conecte uma chave de API para usar a IA na nuvem.',
+    messageKey: 'error.localAiDown.msg',
+    actionKey: 'error.localAiDown.act',
   },
   {
     test: /try pulling|no such model|model .*not found|modelo .*n[ãa]o encontrado/i,
     recovery: 'settings',
-    message: 'O modelo da IA local ainda não terminou de baixar.',
-    action: 'Abra as Configurações e clique em "Baixar IA Local" para concluir o download.',
+    messageKey: 'error.localModelMissing.msg',
+    actionKey: 'error.localModelMissing.act',
   },
 
   // ── Sistema de arquivos ──────────────────────────────────────────────────
   {
     test: /\bEBUSY\b|\bETXTBSY\b|\bEPERM\b|\bEACCES\b|being used by another process/i,
     recovery: 'retry',
-    message: 'Outro programa do seu computador está bloqueando o arquivo — normalmente o antivírus, que verifica downloads novos.',
-    action: 'Aguarde alguns segundos e clique em "Tentar de novo".',
+    messageKey: 'error.fileBusy.msg',
+    actionKey: 'error.fileBusy.act',
   },
   {
     test: /\bENOSPC\b|no space left|disk full/i,
     recovery: 'retry',
-    message: 'Não há espaço em disco suficiente para concluir.',
-    action: 'Libere espaço no disco e tente de novo.',
+    messageKey: 'error.diskFull.msg',
+    actionKey: 'error.diskFull.act',
   },
   {
     test: /\bEMFILE\b|too many open files/i,
     recovery: 'none',
-    message: 'O computador atingiu o limite de arquivos abertos ao mesmo tempo.',
-    action: 'Feche e reabra o app.',
+    messageKey: 'error.tooManyFiles.msg',
+    actionKey: 'error.tooManyFiles.act',
   },
   {
     test: /\bENOENT\b|no such file/i,
     recovery: 'none',
-    message: 'O arquivo não foi encontrado onde o app esperava.',
-    action: 'Ele pode ter sido movido, renomeado ou apagado. Importe a imagem de novo.',
+    messageKey: 'error.fileNotFound.msg',
+    actionKey: 'error.fileNotFound.act',
   },
 
   // ── Chave de API ─────────────────────────────────────────────────────────
   {
     test: /API key not configured|chave n[ãa]o configurada|Could not resolve authentication/i,
     recovery: 'settings',
-    message: 'Nenhuma chave de API está configurada.',
-    action: 'Abra as Configurações para conectar uma chave — ou baixe a IA local, que roda no seu PC sem custo.',
+    messageKey: 'error.noApiKey.msg',
+    actionKey: 'error.noApiKey.act',
   },
   {
     test: /\b401\b|\b403\b|invalid[_ ]api[_ ]key|incorrect api key|unauthorized|forbidden|authentication/i,
     recovery: 'settings',
-    message: 'O provedor de IA recusou a sua chave de API.',
-    action: 'Confira em Configurações se a chave está correta e ainda ativa no painel do provedor.',
+    messageKey: 'error.keyRejected.msg',
+    actionKey: 'error.keyRejected.act',
   },
   {
     test: /insufficient[_ ]quota|billing|payment|out of credit|sem cr[ée]dito/i,
     recovery: 'none',
-    message: 'A sua conta no provedor de IA está sem créditos.',
-    action: 'Adicione créditos no painel do provedor e tente de novo.',
+    messageKey: 'error.noCredits.msg',
+    actionKey: 'error.noCredits.act',
   },
   {
     test: /\b429\b|rate.?limit|too many requests|quota exceeded/i,
     recovery: 'retry',
-    message: 'Você atingiu o limite de uso do provedor de IA.',
-    action: 'Aguarde cerca de um minuto e tente de novo.',
+    messageKey: 'error.rateLimit.msg',
+    actionKey: 'error.rateLimit.act',
   },
 
   // ── Provedor / rede ──────────────────────────────────────────────────────
   {
     test: /non-serverless|not available serverless/i,
     recovery: 'settings',
-    message: 'Esse modelo não está disponível no plano da sua conta no provedor.',
-    action: 'Troque de provedor de IA nas Configurações, ou use a IA local.',
+    messageKey: 'error.notServerless.msg',
+    actionKey: 'error.notServerless.act',
   },
   {
     test: /content[_ ]policy|safety|flagged|moderation|refus/i,
     recovery: 'none',
-    message: 'O provedor de IA recusou o conteúdo por política de uso.',
-    action: 'Ajuste o texto, ou use a IA local — ela roda no seu PC e não tem esse filtro.',
+    messageKey: 'error.contentPolicy.msg',
+    actionKey: 'error.contentPolicy.act',
   },
   {
     test: /\b5\d\d\b|overloaded|bad gateway|service unavailable|internal server error/i,
     recovery: 'retry',
-    message: 'O provedor de IA está instável neste momento.',
-    action: 'Tente de novo em alguns instantes.',
+    messageKey: 'error.providerDown.msg',
+    actionKey: 'error.providerDown.act',
   },
   {
     test: /timeout|timed out|\bETIMEDOUT\b|aborted|AbortError/i,
     recovery: 'retry',
-    message: 'A operação demorou mais do que o esperado e foi interrompida.',
-    action: 'Tente de novo. Se continuar, verifique a sua conexão com a internet.',
+    messageKey: 'error.timeout.msg',
+    actionKey: 'error.timeout.act',
   },
   {
     test: /\bENOTFOUND\b|\bECONNREFUSED\b|\bECONNRESET\b|\bEAI_AGAIN\b|getaddrinfo|fetch failed|network|connection/i,
     recovery: 'retry',
-    message: 'Não foi possível conectar à internet.',
-    action: 'Verifique a sua conexão e tente de novo.',
+    messageKey: 'error.offline.msg',
+    actionKey: 'error.offline.act',
   },
 
   // ── Instalação da IA local ───────────────────────────────────────────────
   {
-    test: /Instalador saiu com c[óo]digo/i,
+    // O main passou a lançar em inglês (é diagnóstico, não interface); o texto
+    // antigo em português fica no padrão para não quebrar nada que ainda o gere.
+    test: /Installer exited with code|Instalador saiu com c[óo]digo/i,
     recovery: 'retry',
-    message: 'A instalação da IA local foi interrompida antes de terminar.',
-    action: 'Clique em "Tentar de novo". Se repetir, instale o Ollama manualmente pelo site ollama.com.',
+    messageKey: 'error.installInterrupted.msg',
+    actionKey: 'error.installInterrupted.act',
   },
   {
     test: /apenas no Windows|only on Windows/i,
     recovery: 'none',
-    message: 'A instalação automática da IA local só está disponível no Windows por enquanto.',
-    action: 'No Mac, instale o Ollama pelo site ollama.com e o app o reconhece sozinho.',
+    messageKey: 'error.windowsOnly.msg',
+    actionKey: 'error.windowsOnly.act',
   },
   {
-    test: /Download falhou/i,
+    test: /Download failed|Download falhou|Model pull failed/i,
     recovery: 'retry',
-    message: 'O download não foi concluído.',
-    action: 'Verifique a sua conexão e clique em "Tentar de novo".',
+    messageKey: 'error.downloadFailed.msg',
+    actionKey: 'error.downloadFailed.act',
   },
 ]
-
-const FALLBACK_MESSAGE = 'Algo deu errado nesta operação.'
-const FALLBACK_ACTION = 'Tente de novo. Se continuar acontecendo, feche e reabra o app.'
 
 /**
  * Traduz qualquer erro para uma mensagem que o usuário entende.
@@ -183,12 +190,20 @@ export function friendlyError(input: unknown, fallback?: string): FriendlyError 
 
   for (const rule of RULES) {
     if (rule.test.test(raw)) {
-      return { message: rule.message, action: rule.action, technical, recovery: rule.recovery }
+      return {
+        message: t(rule.messageKey),
+        action: rule.actionKey ? t(rule.actionKey) : undefined,
+        technical,
+        recovery: rule.recovery,
+      }
     }
   }
   return {
-    message: fallback || FALLBACK_MESSAGE,
-    action: FALLBACK_ACTION,
+    // `fallback` chega já traduzido de quem chamou — descreve a operação
+    // específica ("Não foi possível analisar a imagem."), coisa que uma regra
+    // genérica não teria como saber.
+    message: fallback || t('error.fallback.msg'),
+    action: t('error.fallback.act'),
     technical,
     recovery: 'retry',
   }

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { CHANGELOG, ULTIMA_NOVIDADE, type EntradaChangelog } from '../../data/changelog'
+import { CHANGELOG, ULTIMA_NOVIDADE, itensDaEntrada, type EntradaChangelog } from '../../data/changelog'
+import { useT, useTRich } from '../../i18n'
+import { useCanvasStore } from '../../store'
 
 // Sininho de novidades na barra de título.
 //
@@ -23,6 +25,9 @@ type EstadoUpdate =
 const CHAVE_LIDO = 'novidadesLidasAte'
 
 export default function UpdateBell() {
+  const t = useT()
+  const tRich = useTRich()
+  const appLang = useCanvasStore(s => s.appLang)
   const [aberto, setAberto] = useState(false)
   const [update, setUpdate] = useState<EstadoUpdate>({ status: 'idle' })
   const [versaoAtual, setVersaoAtual] = useState('')
@@ -104,17 +109,22 @@ export default function UpdateBell() {
 
   const entradas = [...entradasRemotas, ...CHANGELOG]
 
-  const dataBR = (iso: string) => {
+  // Era fixo em DD/MM/AAAA. Em inglês isso lê como uma data ERRADA, não só
+  // estranha: 06/07 vira 6 de julho para um leitor e 7 de junho para o outro.
+  const formatarData = (iso: string) => {
     if (!iso) return ''
-    const [a, m, d] = iso.split('-')
-    return a && m && d ? `${d}/${m}/${a}` : ''
+    const [a, m, d] = iso.split('-').map(Number)
+    if (!a || !m || !d) return ''
+    return new Intl.DateTimeFormat(appLang === 'pt' ? 'pt-BR' : 'en-US', {
+      day: '2-digit', month: 'short', year: 'numeric',
+    }).format(new Date(a, m - 1, d))
   }
 
   return (
     <div ref={painelRef} className="relative shrink-0">
       <button
         onClick={abrir}
-        title={temNovidade ? 'Novidades' : 'Novidades do Ref Map'}
+        title={temNovidade ? t('update.bell.news') : t('update.bell.newsTitle')}
         className={`no-drag-region relative flex items-center justify-center w-7 h-7 rounded-md transition-all ${
           aberto ? 'bg-white/[0.09] text-white/80' : 'text-white/40 hover:text-white/75 hover:bg-white/[0.06]'
         }`}
@@ -148,9 +158,11 @@ export default function UpdateBell() {
               style={{ padding: '11px 13px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}
             >
               <span className="text-[11px] text-white/60 truncate">
-                {update.status === 'available' && <>Versão <b className="text-orange-300/90 font-semibold">v{update.version}</b> disponível</>}
-                {update.status === 'downloading' && <>Baixando… {update.percent}%</>}
-                {update.status === 'ready' && <>v{update.version} pronta para instalar</>}
+                {update.status === 'available' && tRich('update.bell.versionAvailable', {
+                  version: <b className="text-orange-300/90 font-semibold">v{update.version}</b>,
+                })}
+                {update.status === 'downloading' && t('update.bell.downloadingPct', { percent: update.percent })}
+                {update.status === 'ready' && t('update.bell.readyShort', { version: `v${update.version}` })}
               </span>
 
               {update.status === 'available' && (
@@ -159,7 +171,7 @@ export default function UpdateBell() {
                   className="shrink-0 px-2 py-0.5 rounded text-[11px] font-medium"
                   style={{ color: 'rgba(251,146,60,0.95)', background: 'rgba(251,146,60,0.15)', border: '1px solid rgba(251,146,60,0.35)' }}
                 >
-                  Baixar
+                  {t('update.bell.download')}
                 </button>
               )}
               {update.status === 'downloading' && (
@@ -173,7 +185,7 @@ export default function UpdateBell() {
                   className="shrink-0 px-2 py-0.5 rounded text-[11px] font-medium"
                   style={{ color: 'rgba(251,146,60,0.95)', background: 'rgba(251,146,60,0.15)', border: '1px solid rgba(251,146,60,0.35)' }}
                 >
-                  Reiniciar e instalar
+                  {t('update.restartInstall')}
                 </button>
               )}
             </div>
@@ -181,12 +193,12 @@ export default function UpdateBell() {
 
           {update.status === 'error' && (
             <div style={{ padding: '11px 13px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-              <p className="text-[11px] text-red-400/85">Não foi possível verificar atualizações.</p>
+              <p className="text-[11px] text-red-400/85">{t('update.bell.checkFailed')}</p>
               <button
                 onClick={() => { setUpdate({ status: 'idle' }); window.api.checkForUpdates().catch(() => {}) }}
                 className="mt-1.5 px-2 py-0.5 rounded-md text-[11px] text-white/55 hover:text-white/85 bg-white/[0.06] hover:bg-white/[0.12] transition-colors"
               >
-                Tentar de novo
+                {t('common.retry')}
               </button>
             </div>
           )}
@@ -201,13 +213,13 @@ export default function UpdateBell() {
                     <span className="text-[12px] font-medium text-white/75">v{entrada.version}</span>
                     {instalada && (
                       <span className="text-[9px] px-1.5 py-[1px] rounded-full text-emerald-300/80" style={{ background: 'rgba(52,211,153,0.10)', border: '1px solid rgba(52,211,153,0.22)' }}>
-                        você tem esta
+                        {t('update.bell.installed')}
                       </span>
                     )}
-                    {entrada.date && <span className="text-[10px] text-white/25 ml-auto shrink-0">{dataBR(entrada.date)}</span>}
+                    {entrada.date && <span className="text-[10px] text-white/25 ml-auto shrink-0">{formatarData(entrada.date)}</span>}
                   </div>
                   <ul className="mt-1.5 space-y-1">
-                    {entrada.items.map((item, i) => (
+                    {itensDaEntrada(entrada, appLang).map((item, i) => (
                       <li key={i} className="flex gap-1.5 text-[11px] text-white/45 leading-relaxed">
                         <span className="text-white/20 shrink-0 select-none">•</span>
                         <span>{item}</span>
@@ -220,7 +232,7 @@ export default function UpdateBell() {
 
             {entradas.length === 0 && (
               <p className="text-[11px] text-white/30" style={{ padding: '12px 13px' }}>
-                Nenhuma novidade registrada ainda.
+                {t('update.bell.empty')}
               </p>
             )}
           </div>

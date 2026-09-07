@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useT, useTRich } from '../i18n'
 
 // Acompanhamento da atualização em andamento.
 //
@@ -18,6 +19,8 @@ type UpdateState =
   | { status: 'ready'; version: string }
 
 export default function UpdateBanner() {
+  const t = useT()
+  const tRich = useTRich()
   const [update, setUpdate] = useState<UpdateState>({ status: 'idle' })
   const [dismissed, setDismissed] = useState(false)
 
@@ -59,13 +62,15 @@ export default function UpdateBanner() {
           <span className="text-white/70">
             {update.status === 'downloading' && (
               <>
-                Baixando atualização…{' '}
+                {t('update.downloading')}{' '}
                 <span className="font-semibold" style={{ color: 'rgba(251,146,60,0.95)' }}>{update.percent}%</span>
               </>
             )}
             {update.status === 'ready' && (
               <>
-                Atualização <span className="font-semibold" style={{ color: 'rgba(251,146,60,0.95)' }}>v{update.version}</span> pronta para instalar
+                {tRich('update.readyToInstall', {
+                  version: <span className="font-semibold" style={{ color: 'rgba(251,146,60,0.95)' }}>v{update.version}</span>,
+                })}
               </>
             )}
           </span>
@@ -94,7 +99,7 @@ export default function UpdateBanner() {
                     border: '1px solid rgba(251,146,60,0.35)',
                   }}
                 >
-                  Reiniciar e instalar
+                  {t('update.restartInstall')}
                 </button>
                 <button
                   onClick={() => setDismissed(true)}

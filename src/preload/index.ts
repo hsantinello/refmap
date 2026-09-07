@@ -68,6 +68,8 @@ const api = {
   setApiKey: (provider: string, key: string) => ipcRenderer.invoke('settings:setApiKey', provider, key),
   getSetting: (key: string): Promise<string | null> => ipcRenderer.invoke('settings:get', key),
   setSetting: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
+  // Idioma resolvido pelo main no boot (setting salva → idioma do SO → 'en').
+  getLang: (): Promise<'en' | 'pt'> => ipcRenderer.invoke('settings:getLang'),
   getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
 
   // Canvas files
