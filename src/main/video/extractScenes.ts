@@ -30,6 +30,8 @@ export interface SceneFrame {
 }
 
 export interface ExtractScenesOptions {
+  /** Cancelamento (botão na UI, fechar o app). Mata o ffmpeg na hora. */
+  signal?: AbortSignal
   threshold?: number       // 0..1 — sensibilidade do corte (menor = mais cenas). Default 0.5
   maxScenes?: number       // teto de segurança. Default 60
   outDir?: string          // pasta onde salvar os quadros. Default: userData/scenes/<timestamp>
@@ -86,7 +88,7 @@ export async function extractScenes(
     pattern,
   )
 
-  const stderr = await runFfmpeg(resolveFfmpegPath(), args)
+  const stderr = await runFfmpeg(resolveFfmpegPath(), args, opts.signal)
   const times = [...stderr.matchAll(/pts_time:([0-9.]+)/g)].map(m => parseFloat(m[1]) + start)
 
   const ordered = (await fs.readdir(outDir)).filter(f => /^scene_\d+\.jpg$/.test(f)).sort()
@@ -188,13 +190,42 @@ function hammingDistance(a: number[], b: number[]): number {
   return d
 }
 
-function runFfmpeg(bin: string, args: string[]): Promise<string> {
+// Processos vivos, para matar todos ao fechar o app.
+const ffmpegAtivos = new Set<ReturnType<typeof spawn>>()
+export function matarFfmpegAtivos(): void {
+  for (const p of ffmpegAtivos) { try { p.kill('SIGKILL') } catch { /* já morreu */ } }
+  ffmpegAtivos.clear()
+}
+
+// Teto duro: nenhum vídeo legítimo do usuário passa disto. Antes não havia teto
+// nem cancelamento — um filme de 2h rodava até o fim mesmo com o modal fechado.
+const FFMPEG_TIMEOUT_MS = 15 * 60_000
+
+function runFfmpeg(bin: string, args: string[], signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new Error('ABORTED')); return }
     const proc = spawn(bin, args, { windowsHide: true })
+    ffmpegAtivos.add(proc)
     let stderr = ''
-    proc.stderr.on('data', d => { stderr += d.toString() })
-    proc.on('error', reject)
+    let encerrado = false
+
+    const matar = (motivo: string) => {
+      if (encerrado) return
+      encerrado = true
+      try { proc.kill('SIGKILL') } catch { /* já morreu */ }
+      reject(new Error(motivo))
+    }
+    const timer = setTimeout(() => matar(`ffmpeg timeout after ${FFMPEG_TIMEOUT_MS} ms`), FFMPEG_TIMEOUT_MS)
+    const aoAbortar = () => matar('ABORTED')
+    signal?.addEventListener('abort', aoAbortar, { once: true })
+    const limpar = () => { clearTimeout(timer); signal?.removeEventListener('abort', aoAbortar); ffmpegAtivos.delete(proc) }
+
+    proc.stderr?.on('data', d => { stderr += d.toString() })
+    proc.on('error', err => { limpar(); if (!encerrado) { encerrado = true; reject(err) } })
     proc.on('close', code => {
+      limpar()
+      if (encerrado) return
+      encerrado = true
       if (code === 0) resolve(stderr)
       else reject(new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-800)}`))
     })

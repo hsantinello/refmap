@@ -1,6 +1,7 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { tm } from './i18n'
+import { handleSeguro } from './security'
 
 let win: BrowserWindow | null = null
 let updateReady = false   // true quando uma atualização já foi BAIXADA e está pronta
@@ -53,15 +54,15 @@ export function initUpdater(mainWindow: BrowserWindow): void {
   // Handlers registrados SEMPRE — mesmo em dev — pra o renderer poder chamar
   // checkForUpdates()/downloadUpdate() sem estourar "No handler registered".
   // Em dev (não empacotado) eles apenas resolvem em silêncio: não há update real.
-  ipcMain.handle('updater:check', () =>
+  handleSeguro('updater:check', () =>
     app.isPackaged ? autoUpdater.checkForUpdates().catch(() => null) : null
   )
 
-  ipcMain.handle('updater:download', () =>
+  handleSeguro('updater:download', () =>
     app.isPackaged ? autoUpdater.downloadUpdate().catch(() => null) : null
   )
 
-  ipcMain.handle('updater:install', () => {
+  handleSeguro('updater:install', () => {
     if (app.isPackaged) setImmediate(() => autoUpdater.quitAndInstall(false, true))
   })
 
@@ -93,6 +94,23 @@ export function initUpdater(mainWindow: BrowserWindow): void {
     send('updater:updateDownloaded', info.version)
   })
 
+  instalarGuardaDeFechamento(mainWindow)
+
+  autoUpdater.on('error', (err) => {
+    console.error('[updater]', err.message)
+    send('updater:error', err.message)
+  })
+}
+
+/** macOS: a janela reaberta pelo Dock é outra. O updater precisa apontar para ela
+ *  (eventos de progresso) e voltar a perguntar ao fechar. */
+export function setUpdaterWindow(janela: BrowserWindow): void {
+  win = janela
+  closeDecided = false
+  instalarGuardaDeFechamento(janela)
+}
+
+function instalarGuardaDeFechamento(mainWindow: BrowserWindow): void {
   // Ao fechar com uma atualização já baixada: oferece "Atualizar e fechar" ou
   // "Apenas fechar", em vez de instalar em silêncio.
   mainWindow.on('close', (e) => {
@@ -116,10 +134,5 @@ export function initUpdater(mainWindow: BrowserWindow): void {
       // fecha sem instalar (a atualização fica guardada p/ próxima vez)
       mainWindow.destroy()
     }
-  })
-
-  autoUpdater.on('error', (err) => {
-    console.error('[updater]', err.message)
-    send('updater:error', err.message)
   })
 }

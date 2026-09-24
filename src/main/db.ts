@@ -98,6 +98,11 @@ export function initDb(): void {
     db.exec('ALTER TABLE nodes ADD COLUMN starred INTEGER NOT NULL DEFAULT 0')
   }
 
+  // Migration: mtime do arquivo no cache de IA. Reexportar a imagem por cima do
+  // mesmo caminho passa a invalidar o cache, em vez de devolver as tags da antiga.
+  const hasCacheMtime = (db.prepare("SELECT COUNT(*) as count FROM pragma_table_info('ai_cache') WHERE name='mtime'").get() as { count: number }).count
+  if (!hasCacheMtime) db.exec('ALTER TABLE ai_cache ADD COLUMN mtime INTEGER')
+
   // Migration: idioma nativo das tags (en/pt) — para não re-traduzir tags que já
   // foram geradas no idioma alvo
   const hasTagLang = (db.prepare("SELECT COUNT(*) as count FROM pragma_table_info('nodes') WHERE name='tag_lang'").get() as { count: number }).count
@@ -208,12 +213,46 @@ export const settingQueries = {
 }
 
 export const aiCacheQueries = {
-  get: (imagePath: string) => {
-    const row = getDb().prepare('SELECT tags_json FROM ai_cache WHERE image_path = ?').get(imagePath) as any
-    return row ? JSON.parse(row.tags_json) : null
+  // `mtime` esperado: se o arquivo mudou desde a gravação, é outra imagem no
+  // mesmo caminho e o cache não vale. Linhas antigas (sem mtime) seguem valendo.
+  get: (imagePath: string, mtime?: number) => {
+    const row = getDb().prepare('SELECT tags_json, mtime FROM ai_cache WHERE image_path = ?').get(imagePath) as any
+    if (!row) return null
+    if (mtime && row.mtime && row.mtime !== mtime) return null
+    return JSON.parse(row.tags_json)
   },
-  set: (imagePath: string, tags: unknown) =>
-    getDb().prepare('INSERT OR REPLACE INTO ai_cache VALUES (?, ?, ?)').run(
-      imagePath, JSON.stringify(tags), Date.now()
+  set: (imagePath: string, tags: unknown, mtime?: number) =>
+    getDb().prepare('INSERT OR REPLACE INTO ai_cache (image_path, tags_json, created_at, mtime) VALUES (?, ?, ?, ?)').run(
+      imagePath, JSON.stringify(tags), Date.now(), mtime ?? null
     ),
+}
+
+// Consultas da limpeza de arquivos (src/main/housekeeping.ts).
+export const housekeepingQueries = {
+  /** Todo caminho de imagem/miniatura que algum nó ainda usa. */
+  caminhosEmUso: (): string[] => {
+    const rows = getDb().prepare('SELECT image_path, thumbnail_path FROM nodes').all() as { image_path?: string; thumbnail_path?: string }[]
+    const out: string[] = []
+    for (const r of rows) { if (r.image_path) out.push(r.image_path); if (r.thumbnail_path) out.push(r.thumbnail_path) }
+    return out
+  },
+  arquivosDoNo: (id: string): { imagePath: string | null; thumbnailPath: string | null } => {
+    const r = getDb().prepare('SELECT image_path, thumbnail_path FROM nodes WHERE id = ?').get(id) as { image_path?: string; thumbnail_path?: string } | undefined
+    return { imagePath: r?.image_path ?? null, thumbnailPath: r?.thumbnail_path ?? null }
+  },
+  arquivoEmUsoPorOutro: (caminho: string, exceptId: string): boolean =>
+    !!getDb().prepare('SELECT 1 FROM nodes WHERE (image_path = ? OR thumbnail_path = ?) AND id != ? LIMIT 1').get(caminho, caminho, exceptId),
+  /** Apaga do cache as linhas cujo arquivo não existe mais. Devolve quantas. */
+  apagarCacheOrfao: (existe: (p: string) => boolean): number => {
+    const db = getDb()
+    const rows = db.prepare('SELECT image_path FROM ai_cache').all() as { image_path: string }[]
+    const del = db.prepare('DELETE FROM ai_cache WHERE image_path = ?')
+    let n = 0
+    for (const r of rows) {
+      // A chave pode ter sufixo de idioma ("…png::pt"): o arquivo é a parte antes.
+      const arquivo = r.image_path.replace(/::(pt|en)$/, '')
+      if (!existe(arquivo)) { del.run(r.image_path); n++ }
+    }
+    return n
+  },
 }

@@ -1,5 +1,33 @@
 [
   {
+    "version": "0.0.30",
+    "date": "2026-09-24",
+    "items": [
+      "Novo painel do ComfyUI, no botão flutuante ao lado do zoom: mostra a configuração da sua máquina (placa, VRAM, memória) e recomenda, entre 244 workflows oficiais do ComfyUI, quais rodam nela — com imagem ou vídeo de exemplo, filtros por imagem/vídeo, modelo e tipo, busca, e download do workflow pronto para arrastar no ComfyUI.",
+      "Cada workflow diz se roda bem, roda, fica apertado ou não roda na sua placa, e avisa quando pede uma versão mais nova do ComfyUI. Botão de reanalisar o hardware quando a leitura falha.",
+      "Qwen Image 2.1 no Prompt Builder: o otimizador aprendeu os três formatos do modelo — criar do zero, editar uma imagem existente e combinar várias imagens de referência.",
+      "As categorias de presets ganharam miniaturas de verdade no lugar do ícone que parecia quebrado.",
+      "Cancelar uma análise de IA agora cancela mesmo, inclusive as que estavam na fila; a extração de cenas de vídeo ganhou botão de cancelar.",
+      "Desfazer uma exclusão devolve a imagem inteira, com tags, notas e favorito.",
+      "Atalhos do canvas não disparam mais enquanto você digita num campo de texto.",
+      "Imagens coladas e vídeos temporários são apagados quando deixam de ser usados; o app não acumula mais lixo na pasta de dados.",
+      "Se o banco de dados não abrir, o app explica o que fazer em vez de travar em silêncio.",
+      "Segurança do aplicativo aprimorada."
+    ],
+    "items_en": [
+      "New ComfyUI panel, on the floating button next to the zoom controls: it shows your machine (GPU, VRAM, memory) and recommends, out of 244 official ComfyUI workflows, which ones run on it — with a sample image or video, filters by image/video, model and type, search, and a workflow download ready to drag into ComfyUI.",
+      "Each workflow says whether it runs well, runs, is a tight fit or won't run on your card, and warns when it needs a newer ComfyUI. A re-scan button appears when the hardware read fails.",
+      "Qwen Image 2.1 in the Prompt Builder: the optimizer learned the model's three formats — creating from scratch, editing an existing image, and combining several reference images.",
+      "Preset categories now show real thumbnails instead of the icon that looked broken.",
+      "Cancelling an AI analysis now really cancels it, including the ones waiting in the queue; video scene extraction got a cancel button.",
+      "Undoing a delete brings the image back whole, with tags, notes and favorite.",
+      "Canvas shortcuts no longer fire while you type in a text field.",
+      "Pasted images and temporary videos are removed once they are no longer used; the app no longer piles up junk in its data folder.",
+      "If the database cannot be opened, the app explains what to do instead of hanging silently.",
+      "Improved application security."
+    ]
+  },
+  {
     "version": "0.0.29",
     "date": "2026-09-07",
     "items": [

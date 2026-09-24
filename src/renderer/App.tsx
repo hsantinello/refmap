@@ -8,6 +8,8 @@ import PromptBuilder from './components/PromptBuilder'
 import Settings from './components/Settings'
 import Onboarding from './components/Onboarding'
 import About from './components/About'
+import ComfyPanel from './components/ComfyPanel'
+import ComfyFab from './components/ComfyFab'
 import Auth from './components/Auth'
 import UpdateBanner from './components/UpdateBanner'
 import LocalInstallBanner, { type LocalInstallProgress } from './components/LocalInstallBanner'
@@ -21,6 +23,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined)
   const [showSettings, setShowSettings] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
+  const [showComfy, setShowComfy] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [ready, setReady] = useState(false)
   const [hasApiKey, setHasApiKey] = useState(false)
@@ -206,12 +209,14 @@ export default function App() {
     setHasApiKey(true)
     setApiProviderName(await resolveProviderName())
     window.dispatchEvent(new CustomEvent('apikey-changed'))
-    const store = useCanvasStore.getState()
-    store.nodes.forEach(node => {
+    // Antes só marcava isPending na store — e ninguém escuta isso: as imagens
+    // ficavam girando para sempre. O evento é o mesmo do botão "tentar de novo".
+    for (const node of useCanvasStore.getState().nodes) {
+      if (node.type !== 'imageNode') continue
       if (node.data.metadataSource === 'none' || node.data.isError) {
-        store.updateNodeData(node.id, { isPending: true, isError: false })
+        window.dispatchEvent(new CustomEvent('retry-analysis', { detail: { nodeId: node.id, imagePath: node.data.imagePath } }))
       }
-    })
+    }
   }
 
   const handleRemoveApiKey = async () => {
@@ -477,6 +482,9 @@ export default function App() {
 
       {showSettings && <Settings onClose={handleCloseSettings} onKeySaved={handleKeySaved} initialView={settingsView} installProgress={installProgress} onInstallLocal={startLocalInstall} onUninstallLocal={startLocalUninstall} />}
       {showAbout && <About onClose={() => setShowAbout(false)} />}
+      {/* Botão do ComfyUI: flutua na borda direita, some enquanto o painel está aberto */}
+      <ComfyFab onClick={() => setShowComfy(true)} escondido={showComfy || showSettings || showAbout || showOnboarding} />
+      {showComfy && <ComfyPanel onClose={() => setShowComfy(false)} />}
       {showOnboarding && <Onboarding onComplete={() => setShowOnboarding(false)} />}
       <ConfirmHost />
     </div>

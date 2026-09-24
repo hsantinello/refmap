@@ -203,7 +203,13 @@ main resolve pelo idioma do SO (`app.getLocale()`) e o renderer lê via
 
 É inglês **de propósito** — vocabulário que vai para o modelo de IA:
 
-- `ai/model-prompts.ts` e `ai/visionPrompt.ts` — system prompts das APIs
+- `ai/model-prompts.ts` e `ai/visionPrompt.ts` — system prompts das APIs.
+  Um perfil de modelo novo do otimizador exige TRÊS lugares em sincronia:
+  `MODEL_PROMPT_CONFIGS` + `IMAGE_MODEL_IDS` (se for imagem) em
+  `main/ai/model-prompts.ts`, e `MODEL_GROUPS` no `PromptBuilder`. O perfil
+  "Qwen Image 2.1" segue o guia oficial: três formatos (texto→imagem; edição
+  com "Content to preserve / Requested changes / Consistency / Do not add";
+  várias referências abrindo com "Figure 1: … Figure 2: …" na ORDEM de upload).
 - `metadata/categorizer.ts` — listas de keywords de classificação
 - `lib/tagExamples.ts`
 
@@ -244,8 +250,111 @@ renderer e todo o main. Arquivo novo com texto de interface: acrescente na lista
   português é o corpo da release no GitHub, gerado por `scripts/release-notes.mjs`
   a partir de `items`. Isso só aparece para quem AINDA não atualizou e a release
   tem descrição. **Ao publicar uma versão, preencha `items` e `items_en`.**
+- **Correções de segurança entram no changelog de forma GENÉRICA** ("segurança
+  do aplicativo aprimorada"), nunca descrevendo a falha corrigida. O changelog é
+  público (release do GitHub + sininho) e quem ainda não atualizou continua
+  exposto ao que ele descreveria. O detalhe fica só na mensagem de commit.
 - **Categorias de tag** (`CAT_LABEL` no PixiCanvas) — já eram inglês nos dois
   idiomas antes desta migração. Mantido como estava.
+
+## Segurança do processo main
+
+Regras em `src/main/security.ts`. A premissa: o que roda na janela do app é
+confiável; qualquer outra coisa que consiga ser carregada nela não é.
+
+- **Todo canal IPC usa `handleSeguro`, nunca `ipcMain.handle`.** Ele recusa
+  pedidos que não venham do frame principal do app (`IPC_BLOQUEADO`). Canal novo
+  registrado com `ipcMain.handle` direto fura essa proteção.
+- **A janela não navega nem abre janelas** fora do app (`blindarWebContents`,
+  aplicado a todo webContents). Sem isso, soltar um `.html` fora do canvas fazia a
+  janela carregá-lo — e a página recebia o `window.api` inteiro.
+- **`getApiKey` devolve a chave mascarada** (`sk-ant-…a1b2`). Quem usa a chave de
+  verdade é o main. Não crie canal que devolva a chave inteira.
+- **`openExternal` só abre `https:` e `mailto:`.**
+- **`saveToPath` só grava `.refmap`.**
+- **`settings:get/set` recusam `apiKey_*`** — as chaves têm canais próprios.
+
+**Arquivos do disco chegam ao renderer pelo esquema `refmap://`**
+(`src/main/media-protocol.ts`), nunca por `file://` — `webSecurity` está ligado.
+- `refmap://media/<caminho absoluto encoded>`: só extensões de imagem/vídeo, com
+  Range (o `<video>` depende disso). Use `mediaUrl()` de `renderer/lib/mediaUrl.ts`
+  e, em `new Image()`, `crossOrigin = 'anonymous'` — senão o canvas contamina.
+- `refmap://lib/`: o Whisper (transformers.min.js + .wasm) empacotado via
+  `extraResources` no package.json; em dev vem do node_modules. Nada de CDN.
+
+**Arquivos que o app cria são limpos** por `src/main/housekeeping.ts`: no boot
+(miniaturas, cenas, colagens e cache que nenhum nó usa) e ao apagar um nó. Regra:
+só apaga o que está DENTRO das pastas do app — imagem do usuário nunca é tocada.
+Imagem colada vai para `userData/pasted` (não para o temp, que o Windows limpa).
+
+**Janela e handlers:** `registerHandlers`/`initUpdater` rodam uma vez; no
+`activate` (macOS) só `setMainWindow`/`setUpdaterWindow` apontam para a janela nova.
+Todo canal IPC deve ler `win` da variável de módulo, nunca capturar a janela.
+
+## Integração ComfyUI (painel "ComfyUI" na barra)
+
+- O catálogo NÃO é uma lista fixa: é montado do índice oficial de templates
+  (`templates/index.json`), o mesmo acervo do "Browse Templates" do ComfyUI.
+  Fonte preferida é o **Comfy Cloud** (`cloud.comfy.org/templates/`, público,
+  idêntico ao GitHub `Comfy-Org/workflow_templates`): é sempre o pacote mais novo
+  (637 templates em set/2026), enquanto o ComfyUI instalado carrega uma cópia
+  congelada da versão dele (0.19.3 → 378). O `/templates/` local é só fallback.
+  O MCP do Comfy Cloud exige API key própria e não serve para isso.
+- Campos novos do índice usados: `io.outputs[].mediaType` (o que o workflow
+  SALVA — critério principal de imagem/vídeo/áudio/3D), `openSource` (false =
+  só API), `minComfyUIVersion` (o painel mostra "Precisa do ComfyUI X+" quando o
+  ComfyUI detectado é mais antigo). O índice do Cloud NÃO traz `vram`; no do
+  ComfyUI local ele é quase sempre igual ao `size`. Logo a VRAM é, na prática,
+  estimada pelo download (×0,6; mínimo ×0,55) salvo nas `CURADAS`.
+- `src/shared/comfy/catalogo.ts` — puro e testado. `montarCatalogo(indice)` filtra
+  o que roda local (`rodaLocal`: fora `api_*`, tag API e `openSource: false`;
+  `openSource: true` é palavra final e ENTRA mesmo com size 0 — workflows só de
+  nós. A lista de marcas de nuvem `MODELOS_NUVEM` e a regra "sem size/vram" só
+  valem quando o índice não declara `openSource` — pacote antigo do ComfyUI.
+  Marcas mudam de lado: MiniMax H3 e Ideogram 4 hoje têm pesos abertos, e a
+  lista já os barrou por engano uma vez), classifica em imagem/vídeo
+  (`tarefaDe`: áudio, 3D e LLM ficam de fora por TAG e por NOME, porque as
+  categorias "Getting Started" e "Use Cases" misturam tudo; "Audio to Video" é
+  vídeo), agrupa por família (`FAMILIAS`) e
+  calcula VRAM: `CURADAS` (15 overrides práticos, fonte `curada`) → campo `vram` do
+  índice (bytes → GiB, fonte `comfyui`) → estimativa pelo tamanho (`estimada`).
+  `recomendar(receitas, máquina, tarefa, {familia, tag, busca})` — `tarefa` é
+  `FiltroTarefa` ('image' | 'video' | 'auto' = sem filtro; o painel abre em
+  'auto' e o card mostra Imagens/Vídeo nesse modo) — ordena por
+  encaixe → `prioridade` (Image/Video antes de Getting Started/Use Cases/Utility)
+  → nota curada → qualidade → velocidade. `miniaturaDe` é sempre
+  `<name>-1.<mediaSubtype>`: o campo `thumbnail` do índice aponta para caminhos
+  que NÃO são servidos (404 local e no GitHub).
+- `src/main/comfyui/hardware.ts` — GPU/VRAM/RAM. Ordem: ComfyUI `/system_stats`
+  (VRAM exata; tenta a setting `comfyUrl`, depois :8188 e :8000) → nvidia-smi →
+  CIM/system_profiler/lspci (só o nome; o `AdapterRAM` do Windows mente).
+- `src/main/comfyui/templates.ts` — fonte do índice, miniaturas e JSON dos
+  workflows. Ordem: Comfy Cloud → GitHub → ComfyUI local (`<url>/templates/`).
+  Miniaturas e workflows saem da mesma fonte do índice, com as públicas como
+  reserva (`fontes()`). **Ao acrescentar campo em `TemplateIndice`, subir
+  `VERSAO_CACHE`** e dar default em `normalizar()`: o cache gravado pela versão
+  anterior do app não tem o campo, e isso já derrubou o catálogo uma vez (o
+  painel mostrava "não foi possível ler o hardware" por causa do índice).
+  Hardware, catálogo e download têm erros separados no painel. Índice cacheado 24 h em
+  `userData/comfy/templates-index.json` (`forcar` ignora); miniaturas em
+  `userData/comfy/thumbs/<name>.<ext>`, no máximo 4 downloads simultâneos,
+  60 s de tempo limite e uma segunda tentativa: as prévias de vídeo são webp
+  ANIMADOS de 0,5–4 MB (123 MB somando as ~100). Por isso o `Miniatura` do
+  painel só pede a prévia quando o card entra na área visível
+  (IntersectionObserver) e, se falhar, mostra "clique para tentar de novo".
+  Só baixa nomes que existem no índice (`NOME_VALIDO`), e o JSON é validado.
+- IPC: `comfy:hardware`, `comfy:templates(forcar)`, `comfy:thumb(name)`,
+  `comfy:downloadWorkflow(name)`. Renderer: `components/ComfyPanel` (dropdown
+  glass próprio `Seletor`, `Miniatura` via `mediaUrl`). O botão que abre o painel
+  é o `ComfyFab` (flutuante, borda direita, meio da altura, montado em
+  `App.tsx`; some enquanto um modal está aberto) — NÃO fica na TopBar, que é
+  região de arrasto da janela. Marca: `components/LogoComfy.tsx`.
+- `src/shared/comfy/descricoesPt.ts` — descrição PT de cada template (o índice
+  só traz inglês), chaveada pelo nome. Template novo sem tradução ganha frase
+  genérica montada das tags (`descricaoPt`); o teste unitário aponta os que
+  faltam. A nota EN continua sendo a descrição oficial.
+- Para ajustar a VRAM de um template: entrada em `CURADAS` com o nome exato do
+  índice (o teste unitário confere que todas existem).
 
 ## Princípios de Desenvolvimento
 

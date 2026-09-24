@@ -1,5 +1,7 @@
 import { app, BrowserWindow } from 'electron'
 import { spawn } from 'child_process'
+import { Readable } from 'stream'
+import { pipeline } from 'stream/promises'
 import fs from 'fs'
 import path from 'path'
 import { getLocalConfig, getLocalTextConfig } from './local'
@@ -60,30 +62,21 @@ async function downloadFile(url: string, dest: string, onPercent: (pct: number) 
   const total = Number(res.headers.get('content-length')) || 0
   let received = 0
 
-  const fileStream = fs.createWriteStream(dest)
-  const reader = res.body.getReader()
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      const chunk = Buffer.from(value)
-      if (!fileStream.write(chunk)) {
-        await new Promise<void>(r => fileStream.once('drain', () => r()))
-      }
-      received += chunk.length
-      onPercent(total ? Math.round((received / total) * 100) : -1)
-    }
-  } finally {
-    fileStream.end()
-  }
-  // ATENÇÃO: esperar 'finish' NÃO basta. 'finish' só diz que os bytes foram
-  // entregues ao SO — o descritor de arquivo ainda está aberto. Executar o .exe
-  // nesse intervalo dá "spawn EBUSY" no Windows. 'close' é o evento que garante
-  // o handle liberado.
-  await new Promise<void>((resolve, reject) => {
-    fileStream.on('close', () => resolve())
-    fileStream.on('error', reject)
+  // Antes o stream de escrita só ganhava listener de 'error' DEPOIS do loop: uma
+  // falha no meio (antivírus segurando a pasta, disco cheio) era exceção sem dono
+  // e derrubava o processo main inteiro; se caísse durante um 'drain', a promise
+  // nunca resolvia e a barra congelava. `pipeline` liga o erro dos dois lados.
+  const origem = Readable.fromWeb(res.body as import('stream/web').ReadableStream)
+  origem.on('data', (chunk: Buffer) => {
+    received += chunk.length
+    onPercent(total ? Math.round((received / total) * 100) : -1)
   })
+  const fileStream = fs.createWriteStream(dest)
+  await pipeline(origem, fileStream)
+  // ATENÇÃO: 'finish' NÃO basta. 'finish' só diz que os bytes foram entregues ao
+  // SO — o descritor ainda está aberto e executar o .exe dá "spawn EBUSY". 'close'
+  // é o que garante o handle liberado.
+  if (!fileStream.closed) await new Promise<void>(r => fileStream.once('close', () => r()))
 }
 
 // Erros do Windows quando o arquivo está travado por outro processo — tipicamente

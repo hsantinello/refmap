@@ -32,8 +32,9 @@ const api = {
   extractVideoScenes: (
     videoPath: string,
     opts?: { threshold?: number; maxScenes?: number; start?: number; end?: number; maxGap?: number },
+    requestId?: string,   // com id, cancelAI(requestId) mata o ffmpeg
   ): Promise<{ frames: { index: number; framePath: string; timestamp: number }[]; capped: boolean; outDir: string }> =>
-    ipcRenderer.invoke('video:extractScenes', videoPath, opts),
+    ipcRenderer.invoke('video:extractScenes', videoPath, opts, requestId),
   // Captura manual de 1 quadro num tempo exato do vídeo
   extractVideoFrame: (
     videoPath: string,
@@ -70,6 +71,12 @@ const api = {
   setSetting: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
   // Idioma resolvido pelo main no boot (setting salva → idioma do SO → 'en').
   getLang: (): Promise<'en' | 'pt'> => ipcRenderer.invoke('settings:getLang'),
+
+  // ComfyUI
+  comfyHardware: (): Promise<import('../main/comfyui/hardware').Hardware> => ipcRenderer.invoke('comfy:hardware'),
+  comfyTemplates: (forcar?: boolean): Promise<import('../shared/comfy/catalogo').TemplateIndice[]> => ipcRenderer.invoke('comfy:templates', forcar),
+  comfyThumb: (template: string): Promise<string | null> => ipcRenderer.invoke('comfy:thumb', template),
+  comfyDownloadWorkflow: (template: string): Promise<string | null> => ipcRenderer.invoke('comfy:downloadWorkflow', template),
   getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
 
   // Canvas files

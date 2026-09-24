@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useT } from '../../i18n'
+import { mediaUrl } from '../../lib/mediaUrl'
 
 export interface SceneFrame {
   index: number
@@ -107,7 +108,7 @@ export default function VideoSceneImport({
         <div className="px-5 py-3 border-b border-white/[0.06] flex flex-col gap-2">
           <video
             ref={videoRef}
-            src={`file://${videoPath}`}
+            src={mediaUrl(videoPath)}
             controls
             className="w-full rounded-lg bg-black max-h-[240px]"
             style={{ border: '1px solid rgba(255,255,255,0.08)' }}
@@ -193,7 +194,7 @@ export default function VideoSceneImport({
                   }}
                 >
                   <img
-                    src={`file://${f.framePath}`}
+                    src={mediaUrl(f.framePath)}
                     className="w-full h-full object-cover"
                     style={{ opacity: on ? 1 : 0.4 }}
                     draggable={false}

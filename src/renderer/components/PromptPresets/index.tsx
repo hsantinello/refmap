@@ -392,11 +392,23 @@ export default function PromptPresets() {
                   {tagColor(item) ? (
                     <span className="shrink-0 mr-1.5 w-3 h-3 rounded-full ring-1 ring-white/20" style={{ backgroundColor: tagColor(item) }} title={t('presets.color')} />
                   ) : tagImage(item) ? (
-                    <span className="shrink-0 mr-1 text-white/20 group-hover:text-orange-400/70 transition-colors" title={t('presets.previewTooltip')}>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
-                      </svg>
-                    </span>
+                    // Miniatura da própria imagem de exemplo. Antes era um ícone
+                    // genérico de "foto" — o mesmo desenho que o sistema usa para
+                    // imagem quebrada, e era assim que os usuários o liam.
+                    //
+                    // lazy: a lista "Todas" tem 321 imagens; só carregam as que
+                    // entram na área visível da rolagem. object-cover: as imagens
+                    // variam entre quadradas, em pé e deitadas.
+                    <img
+                      src={tagImage(item)}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      draggable={false}
+                      // Se uma falhar, ela some em vez de virar o ícone de quebrada.
+                      onError={e => { e.currentTarget.style.display = 'none' }}
+                      className="shrink-0 mr-1 w-6 h-6 rounded-md object-cover ring-1 ring-white/10 opacity-75 group-hover:opacity-100 transition-opacity"
+                    />
                   ) : null}
                   {activeGroup === GRUPO_MEUS && (
                     <>

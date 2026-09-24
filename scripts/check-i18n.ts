@@ -43,6 +43,10 @@ const MIGRADOS = [
   'src/renderer/components/PromptBuilder/index.tsx',
   'src/renderer/components/PixiCanvas/index.tsx',
   'src/renderer/components/PromptPresets/index.tsx',
+  'src/renderer/components/ComfyPanel/index.tsx',
+  'src/renderer/components/ComfyFab.tsx',
+  'src/main/comfyui/templates.ts',
+  'src/main/comfyui/hardware.ts',
 ]
 
 // Conteúdo que é inglês DE PROPÓSITO e não deve virar chave de tradução:
@@ -106,6 +110,9 @@ function semComentarios(src: string): string {
 function ehPortugues(texto: string): boolean {
   if (texto.length < 3) return false
   if (TAILWIND.test(texto)) return false
+  // Chave do dicionário ("comfy.cores", "canvas.menu.delete"): identificador com
+  // pontos, sem espaço. "cores" aqui não é português — é um nome de chave.
+  if (/^[a-z][\w-]*(\.[\w-]+)+$/i.test(texto)) return false
   return ACENTOS.test(texto) || PALAVRAS_PT.test(texto)
 }
 

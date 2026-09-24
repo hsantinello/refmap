@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useT } from '../../i18n'
+import { mediaUrl } from '../../lib/mediaUrl'
 
 // Visualizador das cenas de um nó de vídeo. Mostra todas as cenas em grade; o usuário
 // pode selecionar e adicionar cenas específicas ao canvas como imagens separadas.
@@ -60,7 +61,7 @@ export default function VideoScenesViewer({
                   className="relative rounded-lg overflow-hidden transition-transform hover:scale-[1.02] cursor-pointer"
                   style={{ border: on ? '2px solid #F97316' : '2px solid rgba(255,255,255,0.08)', aspectRatio: '16 / 10', background: '#000' }}
                 >
-                  <img src={`file://${path}`} className="w-full h-full object-cover" style={{ opacity: on ? 1 : 0.75 }} draggable={false} />
+                  <img src={mediaUrl(path)} className="w-full h-full object-cover" style={{ opacity: on ? 1 : 0.75 }} draggable={false} />
                   {on && <span className="absolute top-1 right-1 w-4 h-4 rounded-full flex items-center justify-center text-white text-[9px]" style={{ background: '#F97316' }}>✓</span>}
                 </button>
               )

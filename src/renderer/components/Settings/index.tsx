@@ -20,7 +20,11 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
   const tRich = useTRich()
   const [view, setView] = useState<View>(initialView ?? 'choose')
   const [provider, setProvider] = useState<'anthropic' | 'openai' | 'together'>('anthropic')
+  // `apiKey` é só o que a pessoa DIGITA agora. A chave já salva nunca volta
+  // inteira para a interface: chega mascarada em `chaveSalva` e aparece como
+  // texto de fundo do campo. Salvar só grava quando há uma chave nova digitada.
   const [apiKey, setApiKey] = useState('')
+  const [chaveSalva, setChaveSalva] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [showKey, setShowKey] = useState(false)
   const [closing, setClosing] = useState(false)
@@ -37,8 +41,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
     const load = async () => {
       const savedProvider = (await window.api.getSetting('aiProvider')) as 'anthropic' | 'openai' | 'together' | null
       if (savedProvider) setProvider(savedProvider)
-      const key = await window.api.getApiKey(savedProvider ?? 'anthropic')
-      if (key) setApiKey(key)
+      setChaveSalva(await window.api.getApiKey(savedProvider ?? 'anthropic'))
     }
     load()
   }, [])
@@ -78,8 +81,8 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
 
   const handleProviderChange = async (p: 'anthropic' | 'openai' | 'together') => {
     setProvider(p)
-    const key = await window.api.getApiKey(p)
-    setApiKey(key ?? '')
+    setChaveSalva(await window.api.getApiKey(p))
+    setApiKey('')
   }
 
   const title = view === 'choose' ? t('settings.title.choose') : view === 'api' ? t('settings.title.api') : t('settings.title.local')
@@ -341,7 +344,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                     type={showKey ? 'text' : 'password'}
                     value={apiKey}
                     onChange={e => setApiKey(e.target.value)}
-                    placeholder={provider === 'anthropic' ? 'sk-ant-...' : provider === 'together' ? 'tgp_v1_...' : 'sk-...'}
+                    placeholder={chaveSalva ?? (provider === 'anthropic' ? 'sk-ant-...' : provider === 'together' ? 'tgp_v1_...' : 'sk-...')}
                     style={{ paddingTop: '6px', paddingBottom: '6px', paddingLeft: '14px' }}
                     className="w-full bg-white/[0.08] rounded-lg text-sm text-white/90 placeholder:text-white/25 outline-none focus:bg-white/[0.12] transition-all pr-9 font-mono"
                   />

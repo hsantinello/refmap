@@ -647,6 +647,7 @@ const MODEL_GROUPS: { groupKey: I18nKey; models: { id: string; label: string; ns
       { id: 'krea-2',             label: 'Krea 2' },
       { id: 'midjourney',         label: 'Midjourney' },
       { id: 'nano-banana',        label: 'Nano Banana', json: true },
+      { id: 'qwen-image-2-1',     label: 'Qwen Image 2.1',  nsfw: true },
       { id: 'qwen-image-2512',    label: 'Qwen Image 2512', nsfw: true },
       { id: 'stable-diffusion',   label: 'Stable Diffusion', nsfw: true },
       { id: 'zimage',             label: 'ZImage',          nsfw: true },

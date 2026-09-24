@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useT } from '../../i18n'
+import { mediaUrl } from '../../lib/mediaUrl'
 
 const fmt = (t: number) => {
   if (!isFinite(t) || t < 0) t = 0
@@ -128,7 +129,7 @@ export default function VideoTrimModal({
         <div className="px-5 pt-4 flex items-center justify-center" style={{ background: '#000' }}>
           <video
             ref={videoRef}
-            src={`file://${videoPath}`}
+            src={mediaUrl(videoPath)}
             onLoadedMetadata={onLoaded}
             onClick={togglePlay}
             className="max-h-[46vh] rounded-lg cursor-pointer"

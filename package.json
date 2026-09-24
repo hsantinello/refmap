@@ -1,6 +1,6 @@
 {
   "name": "refmap",
-  "version": "0.0.29",
+  "version": "0.0.30",
   "description": "Canvas flutuante de referências para criadores de IA",
   "main": "out/main/index.js",
   "author": "Ref Map",
@@ -30,6 +30,13 @@
     "compression": "normal",
     "asarUnpack": [
       "node_modules/ffmpeg-static/**"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/@xenova/transformers/dist",
+        "to": "transformers",
+        "filter": ["transformers.min.js", "ort-wasm.wasm", "ort-wasm-simd.wasm"]
+      }
     ],
     "directories": {
       "output": "dist",

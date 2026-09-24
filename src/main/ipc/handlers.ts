@@ -1,4 +1,4 @@
-import { ipcMain, dialog, safeStorage, BrowserWindow, shell, app } from 'electron'
+import { dialog, safeStorage, BrowserWindow, app } from 'electron'
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import sharp from 'sharp'
@@ -15,28 +15,47 @@ import { installLocalAI, uninstallLocal } from '../ai/localInstall'
 import { abrirOperacao, fecharOperacao, cancelarOperacao, foiCancelado, ABORTED } from '../ai/cancel'
 import { extractScenes, extractFrameAt } from '../video/extractScenes'
 import { tm, setMainLang, getMainLang } from '../i18n'
+import { apagarArquivosDoNo } from '../housekeeping'
+import { detectarHardware } from '../comfyui/hardware'
+import { indiceTemplates, miniatura, baixarWorkflow } from '../comfyui/templates'
+import { handleSeguro, abrirExterno, mascararChave, caminhoRefmapValido, configuracaoProtegida } from '../security'
 
-export function registerHandlers(win: BrowserWindow): void {
+// A janela atual. É variável de módulo (e não parâmetro capturado) de propósito:
+// no macOS, fechar a janela e reabrir pelo Dock cria OUTRA janela, e os handlers
+// — registrados uma vez só — precisam enxergar a nova. Antes `registerHandlers`
+// era chamado de novo e lançava "second handler", deixando os antigos presos numa
+// janela destruída.
+let win: BrowserWindow
+export function setMainWindow(janela: BrowserWindow): void { win = janela }
+
+// Data de modificação do arquivo, para o cache de IA e a miniatura saberem que o
+// caminho passou a ter OUTRA imagem (reexportar por cima é rotina no ComfyUI).
+const mtimeDe = (p: string): number => { try { return Math.floor(fs.statSync(p).mtimeMs) } catch { return 0 } }
+
+export function registerHandlers(janela: BrowserWindow): void {
+  win = janela
   // ── Cancelamento de IA ─────────────────────────────────────
   // Aborta a requisição HTTP em andamento. false = já tinha terminado.
-  ipcMain.handle('ai:cancel', (_e, requestId: string) => cancelarOperacao(requestId))
+  handleSeguro('ai:cancel', (_e, requestId: string) => cancelarOperacao(requestId))
 
   // ── Window controls ────────────────────────────────────────────────────
-  ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url))
-  ipcMain.handle('window:minimize', () => win.minimize())
-  ipcMain.handle('window:maximize', () =>
+  // Só https e mailto. Antes abria qualquer endereço, inclusive file: e
+  // protocolos do sistema — ver security.ts.
+  handleSeguro('shell:openExternal', (_e, url: string) => abrirExterno(url))
+  handleSeguro('window:minimize', () => win.minimize())
+  handleSeguro('window:maximize', () =>
     win.isMaximized() ? win.unmaximize() : win.maximize()
   )
-  ipcMain.handle('window:close', () => win.close())
-  ipcMain.handle('window:setAlwaysOnTop', (_e, val: boolean) => {
+  handleSeguro('window:close', () => win.close())
+  handleSeguro('window:setAlwaysOnTop', (_e, val: boolean) => {
     win.setAlwaysOnTop(val, 'floating')
     return val
   })
-  ipcMain.handle('window:isAlwaysOnTop', () => win.isAlwaysOnTop())
-  ipcMain.handle('window:isMaximized', () => win.isMaximized())
+  handleSeguro('window:isAlwaysOnTop', () => win.isAlwaysOnTop())
+  handleSeguro('window:isMaximized', () => win.isMaximized())
 
   // ── File picker ────────────────────────────────────────────────────────
-  ipcMain.handle('image:openFilePicker', async () => {
+  handleSeguro('image:openFilePicker', async () => {
     const result = await dialog.showOpenDialog(win, {
       properties: ['openFile', 'multiSelections'],
       filters: [{ name: tm('main.filePicker.images'), extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
@@ -45,26 +64,36 @@ export function registerHandlers(win: BrowserWindow): void {
   })
 
   // ── Video: detecção de cena + extração de keyframes ─────────────────────
-  ipcMain.handle('video:openFilePicker', async (): Promise<string | null> => {
+  handleSeguro('video:openFilePicker', async (): Promise<string | null> => {
     const result = await dialog.showOpenDialog(win, {
       properties: ['openFile'],
       filters: [{ name: tm('main.filePicker.videos'), extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'] }],
     })
     return result.filePaths[0] ?? null
   })
-  ipcMain.handle('video:extractScenes', (_e, videoPath: string, opts?: { threshold?: number; maxScenes?: number }) =>
-    extractScenes(videoPath, opts),
-  )
-  ipcMain.handle('video:extractFrame', (_e, videoPath: string, timestamp: number) =>
+  handleSeguro('video:extractScenes', async (_e, videoPath: string, opts?: { threshold?: number; maxScenes?: number }, requestId?: string) => {
+    const signal = abrirOperacao(requestId)
+    try {
+      return await extractScenes(videoPath, { ...opts, signal })
+    } catch (err) {
+      if (foiCancelado(signal, err)) throw new Error(ABORTED)
+      throw err
+    } finally {
+      fecharOperacao(requestId)
+    }
+  })
+  handleSeguro('video:extractFrame', (_e, videoPath: string, timestamp: number) =>
     extractFrameAt(videoPath, timestamp),
   )
 
   // ── Clipboard image ────────────────────────────────────────────────────
-  ipcMain.handle('clipboard:readImage', async (): Promise<string | null> => {
+  handleSeguro('clipboard:readImage', async (): Promise<string | null> => {
     const { clipboard, nativeImage } = await import('electron')
     const img = clipboard.readImage()
     if (img.isEmpty()) return null
-    const tmpDir = path.join(app.getPath('temp'), 'refmap-paste')
+    // userData, não temp: a imagem colada É a imagem do nó. No temp, a limpeza
+    // do Windows apagava e o canvas ficava com um nó sem imagem.
+    const tmpDir = path.join(app.getPath('userData'), 'pasted')
     fs.mkdirSync(tmpDir, { recursive: true })
     const tmpPath = path.join(tmpDir, `paste-${Date.now()}.png`)
     fs.writeFileSync(tmpPath, img.toPNG())
@@ -72,7 +101,7 @@ export function registerHandlers(win: BrowserWindow): void {
   })
 
   // Copia a imagem do disco para o clipboard do SO, para colar em outros apps.
-  ipcMain.handle('clipboard:writeImage', async (_e, imagePath: string): Promise<boolean> => {
+  handleSeguro('clipboard:writeImage', async (_e, imagePath: string): Promise<boolean> => {
     const { clipboard, nativeImage } = await import('electron')
     const img = nativeImage.createFromPath(imagePath)
     if (img.isEmpty()) return false
@@ -82,7 +111,7 @@ export function registerHandlers(win: BrowserWindow): void {
 
   // Grava bytes de imagem num arquivo temporário e devolve o caminho (usado para
   // analisar só a região recortada com a IA).
-  ipcMain.handle('image:writeTempImage', async (_e, data: Uint8Array): Promise<string> => {
+  handleSeguro('image:writeTempImage', async (_e, data: Uint8Array): Promise<string> => {
     const dir = path.join(app.getPath('temp'), 'refmap-crop')
     fs.mkdirSync(dir, { recursive: true })
     const p = path.join(dir, `crop-${crypto.randomBytes(6).toString('hex')}.png`)
@@ -91,7 +120,7 @@ export function registerHandlers(win: BrowserWindow): void {
   })
 
   // Copia bytes de imagem (ex.: PNG já recortado) para o clipboard.
-  ipcMain.handle('clipboard:writeImageData', async (_e, data: Uint8Array): Promise<boolean> => {
+  handleSeguro('clipboard:writeImageData', async (_e, data: Uint8Array): Promise<boolean> => {
     const { clipboard, nativeImage } = await import('electron')
     const img = nativeImage.createFromBuffer(Buffer.from(data))
     if (img.isEmpty()) return false
@@ -102,7 +131,7 @@ export function registerHandlers(win: BrowserWindow): void {
   // ── IA Local (Ollama) ──────────────────────────────────────────────────
   // Status do endpoint local: usado nas Settings para mostrar se o Ollama está
   // rodando e listar os modelos instalados.
-  ipcMain.handle('local:status', async (): Promise<{ ok: boolean; models: string[]; model: string }> => {
+  handleSeguro('local:status', async (): Promise<{ ok: boolean; models: string[]; model: string }> => {
     const { baseURL, apiKey, model } = getLocalConfig()          // visão
     const { model: textModel } = getLocalTextConfig()            // texto (sem censura)
     try {
@@ -123,13 +152,14 @@ export function registerHandlers(win: BrowserWindow): void {
 
   // Instala/prepara a IA local dentro do app (baixa Ollama + puxa o modelo).
   // Progresso é enviado via evento 'local:installProgress'.
-  ipcMain.handle('local:install', async () => { await installLocalAI(win); return true })
-  ipcMain.handle('local:uninstall', async () => { await uninstallLocal(win); return true })
+  handleSeguro('local:install', async () => { await installLocalAI(win); return true })
+  handleSeguro('local:uninstall', async () => { await uninstallLocal(win); return true })
 
   // ── Thumbnail generation ───────────────────────────────────────────────
-  ipcMain.handle('image:createThumbnail', async (_e, imagePath: string): Promise<string> => {
+  handleSeguro('image:createThumbnail', async (_e, imagePath: string): Promise<string> => {
     const thumbDir = path.join(app.getPath('userData'), 'thumbnails')
-    const hash = crypto.createHash('md5').update(imagePath).digest('hex')
+    const st = (() => { try { return fs.statSync(imagePath) } catch { return null } })()
+    const hash = crypto.createHash('md5').update(`${imagePath}|${st?.mtimeMs ?? 0}|${st?.size ?? 0}`).digest('hex')
     const thumbPath = path.join(thumbDir, `${hash}.jpg`)
     if (!fs.existsSync(thumbPath)) {
       await sharp(imagePath)
@@ -141,16 +171,16 @@ export function registerHandlers(win: BrowserWindow): void {
   })
 
   // ── Metadata extraction ────────────────────────────────────────────────
-  ipcMain.handle('image:extractMetadata', async (_e, imagePath: string) => {
+  handleSeguro('image:extractMetadata', async (_e, imagePath: string) => {
     return await extractMetadata(imagePath)
   })
 
   // ── AI analysis ───────────────────────────────────────────────────────
-  ipcMain.handle('image:analyzeWithAI', async (_e, imagePath: string, lang: 'en' | 'pt' = 'en', force = false, requestId?: string) => {
+  handleSeguro('image:analyzeWithAI', async (_e, imagePath: string, lang: 'en' | 'pt' = 'en', force = false, requestId?: string) => {
     // Cache por idioma: análise em PT e em EN são entradas separadas.
     const cacheKey = lang === 'pt' ? `${imagePath}::pt` : imagePath
     // force = true (botão "Reanalisar com IA") pula a leitura do cache e refaz de verdade.
-    const cached = force ? null : aiCacheQueries.get(cacheKey)
+    const cached = force ? null : aiCacheQueries.get(cacheKey, mtimeDe(imagePath))
     if (cached && typeof cached === 'string' && /\{[^}]+\}/.test(cached)) return cached
 
     // A partir daqui vai haver chamada de rede: torna a análise cancelável.
@@ -280,7 +310,7 @@ export function registerHandlers(win: BrowserWindow): void {
         s.trimStart().startsWith('{') &&
         /\}/.test(s) &&
         (s.match(/\[[^\]]+\]/g)?.length ?? 0) >= 5
-      if (isWellFormedTags(tags)) aiCacheQueries.set(cacheKey, tags)
+      if (isWellFormedTags(tags)) aiCacheQueries.set(cacheKey, tags, mtimeDe(imagePath))
       return tags
     } catch (err) {
       // Cancelar é ação do usuário, não falha: vira um erro único que a UI
@@ -293,7 +323,7 @@ export function registerHandlers(win: BrowserWindow): void {
   })
 
   // ── Prompt optimization ───────────────────────────────────────────────
-  ipcMain.handle('prompt:optimize', async (_e, prompt: string, modelId: string, format: 'text' | 'json' = 'text', requestId?: string) => {
+  handleSeguro('prompt:optimize', async (_e, prompt: string, modelId: string, format: 'text' | 'json' = 'text', requestId?: string) => {
     // Registrado antes do preparo: o cancelamento pode chegar a qualquer
     // momento, inclusive antes de a chamada HTTP sair.
     const signal = abrirOperacao(requestId)
@@ -515,7 +545,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
   // ── Prompt de animação (first/last frame) ─────────────────────────────
   // Recebe DUAS imagens (primeiro e último quadro) e gera um prompt de MOVIMENTO
   // descrevendo a transição — para workflows image-to-video de first/last frame.
-  ipcMain.handle('prompt:animate', async (_e, firstPath: string, lastPath: string, requestId?: string): Promise<string> => {
+  handleSeguro('prompt:animate', async (_e, firstPath: string, lastPath: string, requestId?: string): Promise<string> => {
     const signal = abrirOperacao(requestId)
     const provider = settingQueries.get('aiProvider') || 'anthropic'
     const decryptKey = (enc: unknown): string => {
@@ -582,7 +612,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
   })
 
   // ── Tag translation ───────────────────────────────────────────────────
-  ipcMain.handle('tags:translate', async (_e, values: string[], targetLang: 'pt' | 'en') => {
+  handleSeguro('tags:translate', async (_e, values: string[], targetLang: 'pt' | 'en') => {
     const provider = settingQueries.get('aiProvider') || 'anthropic'
     const decryptKey = (enc: unknown): string => {
       if (!enc || typeof enc !== 'string') return ''
@@ -631,7 +661,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
   })
 
   // ── Speech transcription (Whisper) ────────────────────────────────────
-  ipcMain.handle('speech:transcribe', async (_e, audioData: Uint8Array) => {
+  handleSeguro('speech:transcribe', async (_e, audioData: Uint8Array) => {
     // Try active provider key first; fall back to explicit openai key
     const provider = settingQueries.get('aiProvider') || 'anthropic'
     const encryptedActive = provider !== 'anthropic' ? settingQueries.get(`apiKey_${provider}`) : null
@@ -669,17 +699,22 @@ The sections, element lists, formulas and examples above describe the FULL vocab
   })
 
   // ── Settings ───────────────────────────────────────────────────────────
-  ipcMain.handle('settings:getApiKey', (_e, provider: string) => {
+  // Devolve a chave MASCARADA ("sk-ant-…a1b2"), nunca inteira. Quem usa a chave
+  // de verdade é o main, que descriptografa na hora de chamar a API; a interface
+  // só precisa saber se existe e qual o prefixo (tgp_ = Together, que transcreve).
+  // Antes este canal entregava a chave em texto puro — era o alvo final da
+  // falha de navegação descrita em security.ts.
+  handleSeguro('settings:getApiKey', (_e, provider: string) => {
     const encrypted = settingQueries.get(`apiKey_${provider}`)
     if (!encrypted) return null
     try {
-      return safeStorage.decryptString(Buffer.from(encrypted, 'hex'))
+      return mascararChave(safeStorage.decryptString(Buffer.from(encrypted, 'hex')))
     } catch {
       return null
     }
   })
 
-  ipcMain.handle('settings:setApiKey', (_e, provider: string, key: string) => {
+  handleSeguro('settings:setApiKey', (_e, provider: string, key: string) => {
     // Chave em branco = remover. Guardamos '' (falsy) em vez do hex da string
     // vazia criptografada — senão o `if (!encryptedKey)` dos handlers passa batido
     // e o SDK acaba estourando um erro de auth confuso em vez de "not configured".
@@ -692,8 +727,12 @@ The sections, element lists, formulas and examples above describe the FULL vocab
     return true
   })
 
-  ipcMain.handle('settings:get', (_e, key: string) => settingQueries.get(key))
-  ipcMain.handle('settings:set', (_e, key: string, value: string) => {
+  // As chaves de API só passam pelos canais próprios (que criptografam e mascaram).
+  // Pelo canal genérico dava para ler o valor cifrado ou sobrescrevê-lo.
+  handleSeguro('settings:get', (_e, key: string) =>
+    configuracaoProtegida(key) ? null : settingQueries.get(key))
+  handleSeguro('settings:set', (_e, key: string, value: string) => {
+    if (configuracaoProtegida(key)) return false
     settingQueries.set(key, value)
     // O main mantém a própria cópia do idioma (não enxerga o Zustand). Sem isso,
     // trocar o idioma no app deixaria o diálogo do updater e o progresso do
@@ -704,16 +743,26 @@ The sections, element lists, formulas and examples above describe the FULL vocab
 
   // Idioma resolvido no boot: setting salva ou, na primeira execução, o idioma
   // do sistema. O renderer usa isto em vez de assumir 'en'.
-  ipcMain.handle('settings:getLang', () => getMainLang())
+  handleSeguro('settings:getLang', () => getMainLang())
 
-  ipcMain.handle('app:getVersion', () => {
+  // ── ComfyUI: máquina e receitas recomendadas ──────────────────────────
+  // A URL do ComfyUI é opcional (setting 'comfyUrl'); sem ela o main tenta as
+  // portas padrão. Detecção nunca lança: hardware desconhecido vira null.
+  handleSeguro('comfy:hardware', () => detectarHardware(settingQueries.get('comfyUrl')))
+  // Índice completo (o renderer monta o catálogo com `montarCatalogo`). `forcar`
+  // ignora o cache de 24 h — é o botão de atualizar do painel.
+  handleSeguro('comfy:templates', (_e, forcar?: boolean) => indiceTemplates(settingQueries.get('comfyUrl'), !!forcar))
+  handleSeguro('comfy:thumb', (_e, template: string) => miniatura(template))
+  handleSeguro('comfy:downloadWorkflow', (_e, template: string) => baixarWorkflow(win, template))
+
+  handleSeguro('app:getVersion', () => {
     const { app } = require('electron')
     return app.getVersion()
   })
 
   // ── Canvas file export/import ──────────────────────────────────────────
   // ── Auto-backup (no dialog — saves to userData/backups) ──────────────────
-  ipcMain.handle('canvas:autoBackup', async (_e, data: { name: string; nodes: unknown[]; tags: unknown[] }) => {
+  handleSeguro('canvas:autoBackup', async (_e, data: { name: string; nodes: unknown[]; tags: unknown[] }) => {
     try {
       const { app } = require('electron') as typeof import('electron')
       const path = require('path') as typeof import('path')
@@ -732,7 +781,14 @@ The sections, element lists, formulas and examples above describe the FULL vocab
   })
 
   // Save directly to a known path (no dialog) — used by Ctrl+S
-  ipcMain.handle('canvas:saveToPath', async (_e, filePath: string, data: { name: string; nodes: unknown[]; tags: unknown[] }) => {
+  handleSeguro('canvas:saveToPath', async (_e, filePath: string, data: { name: string; nodes: unknown[]; tags: unknown[] }) => {
+    // Só grava arquivo .refmap em caminho absoluto. Antes aceitava qualquer
+    // caminho vindo da interface. Recusar aqui cai no fluxo que já existe no
+    // Ctrl+S: abre a janela de salvar.
+    if (!caminhoRefmapValido(filePath)) {
+      console.warn('[seguranca] saveToPath recusado:', String(filePath).slice(0, 120))
+      return false
+    }
     try {
       const fs = require('fs') as typeof import('fs')
       fs.writeFileSync(filePath, JSON.stringify({ version: 1, ...data }, null, 2), 'utf-8')
@@ -740,7 +796,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
     } catch (err) { console.error('[saveToPath]', err); return false }
   })
 
-  ipcMain.handle('canvas:exportFile', async (_e, data: { name: string; nodes: unknown[]; tags: unknown[] }) => {
+  handleSeguro('canvas:exportFile', async (_e, data: { name: string; nodes: unknown[]; tags: unknown[] }) => {
     const result = await dialog.showSaveDialog(win, {
       defaultPath: `${data.name}.refmap`,
       filters: [{ name: 'Ref Map Canvas', extensions: ['refmap'] }],
@@ -751,7 +807,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
     return result.filePath  // return path so caller can remember it
   })
 
-  ipcMain.handle('canvas:openFile', async () => {
+  handleSeguro('canvas:openFile', async () => {
     const result = await dialog.showOpenDialog(win, {
       properties: ['openFile'],
       filters: [{ name: 'Ref Map Canvas', extensions: ['refmap'] }],
@@ -762,50 +818,51 @@ The sections, element lists, formulas and examples above describe the FULL vocab
   })
 
   // ── Canvas CRUD ────────────────────────────────────────────────────────
-  ipcMain.handle('canvas:list', () => canvasQueries.getAll())
-  ipcMain.handle('canvas:load', (_e, canvasId: string) => {
+  handleSeguro('canvas:list', () => canvasQueries.getAll())
+  handleSeguro('canvas:load', (_e, canvasId: string) => {
     const nodes = nodeQueries.getByCanvas(canvasId)
     const tags = tagQueries.getByCanvas(canvasId)
     return { nodes, tags }
   })
-  ipcMain.handle('canvas:create', (_e, name: string) => canvasQueries.create(name))
-  ipcMain.handle('canvas:rename', (_e, id: string, name: string) => canvasQueries.rename(id, name))
-  ipcMain.handle('canvas:delete', (_e, id: string) => canvasQueries.delete(id))
+  handleSeguro('canvas:create', (_e, name: string) => canvasQueries.create(name))
+  handleSeguro('canvas:rename', (_e, id: string, name: string) => canvasQueries.rename(id, name))
+  handleSeguro('canvas:delete', (_e, id: string) => canvasQueries.delete(id))
 
   // ── Node CRUD ──────────────────────────────────────────────────────────
-  ipcMain.handle('node:create', (_e, node: Parameters<typeof nodeQueries.upsert>[0]) => {
+  handleSeguro('node:create', (_e, node: Parameters<typeof nodeQueries.upsert>[0]) => {
     nodeQueries.upsert(node)
     return true
   })
-  ipcMain.handle('node:updateMetadata', (_e, id: string, source: string, modelName?: string) => {
+  handleSeguro('node:updateMetadata', (_e, id: string, source: string, modelName?: string) => {
     nodeQueries.updateMetadata(id, source, modelName)
   })
-  ipcMain.handle('node:updateThumbnail', (_e, id: string, thumbPath: string) => {
+  handleSeguro('node:updateThumbnail', (_e, id: string, thumbPath: string) => {
     nodeQueries.updateThumbnail(id, thumbPath)
   })
-  ipcMain.handle('node:setStarred', (_e, id: string, starred: boolean) => {
+  handleSeguro('node:setStarred', (_e, id: string, starred: boolean) => {
     nodeQueries.setStarred(id, starred)
   })
-  ipcMain.handle('node:updatePosition', (_e, id: string, x: number, y: number) => {
+  handleSeguro('node:updatePosition', (_e, id: string, x: number, y: number) => {
     nodeQueries.updatePosition(id, x, y)
     return true
   })
-  ipcMain.handle('node:updateSize', (_e, id: string, width: number, height: number) => {
+  handleSeguro('node:updateSize', (_e, id: string, width: number, height: number) => {
     nodeQueries.updateSize(id, width, height)
     return true
   })
-  ipcMain.handle('node:delete', (_e, id: string) => {
+  handleSeguro('node:delete', (_e, id: string) => {
+    apagarArquivosDoNo(id)
     nodeQueries.delete(id)
     return true
   })
-  ipcMain.handle('node:saveTags', (_e, nodeId: string, tags: Parameters<typeof tagQueries.insertMany>[1], tagLang?: 'en' | 'pt') => {
+  handleSeguro('node:saveTags', (_e, nodeId: string, tags: Parameters<typeof tagQueries.insertMany>[1], tagLang?: 'en' | 'pt') => {
     tagQueries.deleteByNode(nodeId)
     if (tags.length > 0) tagQueries.insertMany(nodeId, tags)
     if (tagLang) nodeQueries.setTagLang(nodeId, tagLang)
     return true
   })
 
-  ipcMain.handle('node:createGroup', (_e, groupNode: {
+  handleSeguro('node:createGroup', (_e, groupNode: {
     id: string; canvasId: string; x: number; y: number; width: number; height: number; label?: string
   }, childIds: string[]) => {
     nodeQueries.upsert({
@@ -827,21 +884,23 @@ The sections, element lists, formulas and examples above describe the FULL vocab
     return true
   })
 
-  ipcMain.handle('node:updateGroupLabel', (_e, id: string, label: string) => {
+  handleSeguro('node:updateGroupLabel', (_e, id: string, label: string) => {
     nodeQueries.updateComfyParams(id, label ? JSON.stringify({ label }) : null)
     return true
   })
 
-  ipcMain.handle('node:updateParent', (_e, id: string, parentId: string | null) => {
+  handleSeguro('node:updateParent', (_e, id: string, parentId: string | null) => {
     nodeQueries.updateParent(id, parentId)
     return true
   })
 
-  ipcMain.handle('node:deleteWithChildren', (_e, id: string) => {
+  handleSeguro('node:deleteWithChildren', (_e, id: string) => {
     const children = nodeQueries.getChildren(id)
     for (const child of children) {
+      apagarArquivosDoNo(child.id)
       nodeQueries.delete(child.id)
     }
+    apagarArquivosDoNo(id)
     nodeQueries.delete(id)
     return true
   })

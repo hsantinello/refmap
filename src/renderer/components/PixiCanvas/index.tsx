@@ -10,6 +10,8 @@ import VideoSceneImport from '../VideoSceneImport'
 import VideoTrimModal from '../VideoTrimModal'
 import { recordDuration, getEstimateSeconds } from '../../lib/estimate'
 import { useT } from '../../i18n'
+import { mediaUrl } from '../../lib/mediaUrl'
+import { foiCancelado } from '../../lib/friendlyError'
 import type { I18nKey } from '../../../shared/i18n'
 
 // ─── busca: normalização + sinônimos/hiperônimos bilíngues (PT↔EN) ───────────
@@ -167,7 +169,8 @@ function getImageNaturalSize(path: string): Promise<{ w: number; h: number }> {
     const img = new Image()
     img.onload  = () => res({ w: img.naturalWidth, h: img.naturalHeight })
     img.onerror = () => res({ w: 1, h: 1 })
-    img.src = `file://${path}`
+    img.crossOrigin = 'anonymous'
+    img.src = mediaUrl(path)
   })
 }
 
@@ -184,7 +187,8 @@ function loadTexture(path: string): Promise<{ texture: Texture; w: number; h: nu
       } catch (e) { console.warn('[PixiCanvas] Texture create failed:', e); resolve(null) }
     }
     img.onerror = () => resolve(null)
-    img.src = `file://${path}`
+    img.crossOrigin = 'anonymous'
+    img.src = mediaUrl(path)
   })
 }
 
@@ -385,8 +389,18 @@ function extractDominantColors(imagePath: string, count = 6): Promise<string[]> 
       }))
     }
     img.onerror = () => resolve([])
-    img.src = `file://${imagePath}`
+    img.crossOrigin = 'anonymous'
+    img.src = mediaUrl(imagePath)
   })
+}
+
+// Há alguma IA configurada? Antes o botão "Reanalisar" só olhava Anthropic e
+// OpenAI: quem usa Together ou a IA local era mandado para as Configurações em
+// vez de reanalisar. As chaves chegam mascaradas — só importa se existem.
+async function temAlgumaIA(): Promise<boolean> {
+  const chaves = await Promise.all(['anthropic', 'openai', 'together'].map(p => window.api.getApiKey(p)))
+  if (chaves.some(Boolean)) return true
+  try { return (await window.api.getLocalStatus()).ok } catch { return false }
 }
 
 function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
@@ -587,12 +601,10 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
             onClick={e => {
               e.stopPropagation()
               if (data.isPending) return
-              window.api.getSetting('apiKey_anthropic').then(k1 =>
-                window.api.getSetting('apiKey_openai').then(k2 => {
-                  if (!k1 && !k2) { window.dispatchEvent(new CustomEvent('open-settings')); return }
-                  window.dispatchEvent(new CustomEvent('retry-analysis', { detail: { nodeId, imagePath: data.imagePath, reanalyze: true } }))
-                })
-              )
+              temAlgumaIA().then(tem => {
+                if (!tem) { window.dispatchEvent(new CustomEvent('open-settings')); return }
+                window.dispatchEvent(new CustomEvent('retry-analysis', { detail: { nodeId, imagePath: data.imagePath, reanalyze: true } }))
+              })
             }}
             disabled={data.isPending}
             title={t('canvas.reanalyze')}
@@ -674,12 +686,10 @@ function TagsPanel({ nodeId, data }: { nodeId: string; data: ImageNodeData }) {
       {data.isError && (
         <button
           onClick={() => {
-            window.api.getSetting('apiKey_anthropic').then(k1 =>
-              window.api.getSetting('apiKey_openai').then(k2 => {
-                if (!k1 && !k2) { window.dispatchEvent(new CustomEvent('open-settings')); return }
-                window.dispatchEvent(new CustomEvent('retry-analysis', { detail: { nodeId, imagePath: data.imagePath } }))
-              })
-            )
+            temAlgumaIA().then(tem => {
+              if (!tem) { window.dispatchEvent(new CustomEvent('open-settings')); return }
+              window.dispatchEvent(new CustomEvent('retry-analysis', { detail: { nodeId, imagePath: data.imagePath } }))
+            })
           }}
           className="text-xs text-red-400/70 bg-red-500/10 rounded-lg px-2 py-1.5 border border-red-500/15 hover:bg-red-500/20 hover:text-red-400 transition-colors text-left cursor-pointer"
         >
@@ -910,7 +920,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       flashCopied()
     }
     img.onerror = () => { window.api.copyImageToClipboard(imagePath).catch(console.error); flashCopied() }
-    img.src = `file://${imagePath}`
+    img.crossOrigin = 'anonymous'
+    img.src = mediaUrl(imagePath)
   }, [])
 
 
@@ -985,7 +996,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const analysisTotalRef = useRef(0)
   const analysisDoneRef  = useRef(0)
-  const aiQueueRef       = useRef<Array<() => Promise<void>>>([])
+  const aiQueueRef       = useRef<{ run: () => void; nodeId?: string }[]>([])
   const aiRunningRef     = useRef(0)
   // Ids das análises em voo, para abortar as requisições HTTP ao cancelar o lote.
   const aiInflightRef    = useRef<Set<string>>(new Set())
@@ -1218,7 +1229,10 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     const doLoad = () => {
       // Check texture cache first (avoids redrawing canvas2D on tab switch)
       const srcPath = data.thumbnailPath || data.imagePath
-      const cached = _textureCache.get(srcPath + ':' + width)
+      let cached = _textureCache.get(srcPath + ':' + width)
+      // Textura já destruída (evicção antiga): não serve, carrega do zero.
+      if (cached && (cached.texture as { destroyed?: boolean }).destroyed) { _textureCache.delete(srcPath + ':' + width); cached = undefined }
+      let usouCache = false
       if (cached && nodesRef.current.has(id)) {
         const imgH = cached.h
         state.height = imgH; state.loaded = true
@@ -1239,8 +1253,13 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           state.sprite = spr
           if (state.cfL || state.cfR || state.cfT || state.cfB) applyCrop(state, worldRef.current?.scale.x ?? 1)
           else redrawBg(state, worldRef.current?.scale.x ?? 1)
-        } catch { /* fall through to full load */ }
-        return
+          usouCache = true
+        } catch {
+          // O `return` ficava fora do try: o nó virava loaded sem sprite e nunca mais
+          // tentava. Agora descarta o cache e cai no carregamento completo.
+          _textureCache.delete(srcPath + ':' + width); state.loaded = false
+        }
+        if (usouCache) return
       }
 
       const img = new Image()
@@ -1281,7 +1300,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         } catch (e) { console.warn('[PixiCanvas] sprite create failed:', e) }
       }
       img.onerror = () => console.warn('[PixiCanvas] image load failed:', srcPath)
-      img.src = `file://${srcPath}`
+      img.crossOrigin = 'anonymous'
+      img.src = mediaUrl(srcPath)
     }
 
     if (animDelay > 0) setTimeout(doLoad, animDelay)
@@ -1332,11 +1352,13 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   }, [updateNodeData])
 
   // ─ AI queue — max 3 concurrent analyses ─────────────────────────────────
-  const enqueueAI = useCallback((fn: () => Promise<void>) => {
+  // `nodeId` identifica o dono de cada item da fila, para o cancelamento conseguir
+  // liberar quem nunca chegou a rodar.
+  const enqueueAI = useCallback((fn: () => Promise<void>, nodeId?: string) => {
     const run = () => {
-      if (aiRunningRef.current >= MAX_AI_CONCURRENT) { aiQueueRef.current.push(run); return }
+      if (aiRunningRef.current >= MAX_AI_CONCURRENT) { aiQueueRef.current.push({ run, nodeId }); return }
       aiRunningRef.current++
-      fn().finally(() => { aiRunningRef.current--; const next = aiQueueRef.current.shift(); if (next) next() })
+      fn().finally(() => { aiRunningRef.current--; const next = aiQueueRef.current.shift(); if (next) next.run() })
     }
     run()
   }, [])
@@ -1346,6 +1368,14 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   // que era o idioma errado deixa de custar a espera inteira.
   const cancelarAnalise = useCallback(() => {
     analysisGenRef.current++
+    // Quem ainda estava na fila nunca vai rodar: solta o "em processamento" e tira
+    // o spinner. Antes o finally que faria isso vivia dentro da closure descartada,
+    // e a imagem ficava em "Analisando…" para sempre, com reanalisar desabilitado.
+    for (const { nodeId } of aiQueueRef.current) {
+      if (!nodeId) continue
+      processingRef.current.delete(nodeId)
+      updatePixiNodeData(nodeId, { isPending: false, isError: false })
+    }
     aiQueueRef.current = []
     for (const id of aiInflightRef.current) void window.api.cancelAI(id).catch(() => {})
     aiInflightRef.current.clear()
@@ -1354,7 +1384,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     analysisTotalRef.current = 0
     analysisDoneRef.current = 0
     setAnalysisProgress(null)
-  }, [])
+  }, [updatePixiNodeData])
 
   // ─ processImage ───────────────────────────────────────────────────────────
 
@@ -1383,7 +1413,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         }, 'image/png')
       }
       img.onerror = () => resolve(basePath)
-      img.src = `file://${basePath}`
+      img.crossOrigin = 'anonymous'
+      img.src = mediaUrl(basePath)
     })
   }, [])
 
@@ -1491,8 +1522,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       await window.api.saveNodeTags(nodeId, tags.map(t => ({ id: t.id, category: t.category, value: t.value, source: t.source })), tagLang)
       flashSave()
     } catch (err) {
-      console.error('[PixiCanvas] processImage:', err)
-      updatePixiNodeData(nodeId, { isPending: false, isError: true })
+      if (!foiCancelado(err)) console.error('[PixiCanvas] processImage:', err)
+      updatePixiNodeData(nodeId, { isPending: false, isError: !foiCancelado(err) })
     } finally {
       // Sobra de um lote cancelado: não conta em nada. Sem esta guarda ela
       // avançaria o progresso do lote atual, que não é dela.
@@ -1538,8 +1569,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       await window.api.saveNodeTags(nodeId, merged.map(t => ({ id: t.id, category: t.category, value: t.value, source: t.source })), tagLang)
       flashSave()
     } catch (err) {
-      console.error('[PixiCanvas] reanalyzeWithAI:', err)
-      updatePixiNodeData(nodeId, { isPending: false, isError: true })
+      if (!foiCancelado(err)) console.error('[PixiCanvas] reanalyzeWithAI:', err)
+      updatePixiNodeData(nodeId, { isPending: false, isError: !foiCancelado(err) })
     } finally {
       analysisDoneRef.current++
       const done = analysisDoneRef.current, total = analysisTotalRef.current
@@ -1581,7 +1612,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       addPixiNode(nodeId, 'imageNode', pos.x, pos.y, displayWidth, newData)
       if (!processingRef.current.has(nodeId)) {
         processingRef.current.add(nodeId)
-        enqueueAI(() => processImage(imagePath, nodeId).finally(() => processingRef.current.delete(nodeId)))
+        enqueueAI(() => processImage(imagePath, nodeId).finally(() => processingRef.current.delete(nodeId)), nodeId)
       }
       window.api.createNode({ id: nodeId, canvasId, imagePath, x: pos.x, y: pos.y, width: displayWidth, height: 200, source: 'none' }).catch(console.error)
 
@@ -1622,7 +1653,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     if (newData) addPixiNode(nodeId, 'imageNode', x, y, displayWidth, newData)
     if (!processingRef.current.has(nodeId)) {
       processingRef.current.add(nodeId)
-      enqueueAI(() => processImage(cover, nodeId).finally(() => processingRef.current.delete(nodeId)))
+      enqueueAI(() => processImage(cover, nodeId).finally(() => processingRef.current.delete(nodeId)), nodeId)
     }
     window.api.createNode({ id: nodeId, canvasId, imagePath: cover, x, y, width: displayWidth, height: 200, source: 'none' }).catch(console.error)
     window.api.setSetting('video_' + nodeId, JSON.stringify({ name, scenes })).catch(() => {}) // persiste nome + cenas
@@ -1813,6 +1844,22 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           useCanvasStore.getState().setNodes([...useCanvasStore.getState().nodes, node])
           addPixiNode(node.id, node.type as PixiNode['type'], node.position.x, node.position.y,
             (node.style?.width as number) ?? 240, node.data, 0, (node.style?.height as number) ?? undefined)
+          // A exclusão apagou a linha do banco; só recolocar na tela deixava a imagem
+          // sumir de vez ao reabrir o app. Repersiste tudo o que a exclusão tirou.
+          void window.api.createNode({
+            id: node.id, canvasId: node.data.canvasId, imagePath: node.data.imagePath ?? '',
+            x: node.position.x, y: node.position.y,
+            width: (node.style?.width as number) ?? 240, height: (node.style?.height as number) ?? 200,
+            source: node.data.metadataSource ?? 'none',
+            nodeType: node.type === 'groupNode' ? 'group' : node.type === 'metadataNode' ? 'metadata' : 'image',
+            parentId: node.parentId, linkedNodeId: pixiNode.data.linkedImageNodeId,
+            comfyParams: node.data.comfyParams ? JSON.stringify(node.data.comfyParams) : undefined,
+          }).then(async () => {
+            if (node.data.tags?.length) await window.api.saveNodeTags(node.id, node.data.tags, node.data.tagLang)
+            if (node.data.metadataSource && node.data.metadataSource !== 'none') await window.api.updateNodeMetadata(node.id, node.data.metadataSource, node.data.modelName)
+            if (node.data.thumbnailPath) await window.api.updateNodeThumbnail(node.id, node.data.thumbnailPath)
+            if (node.data.starred) await window.api.setNodeStarred(node.id, true)
+          }).catch(console.error)
           if (pixiNode.data.linkedImageNodeId) {
             linkedRef.current.set(node.id, pixiNode.data.linkedImageNodeId)
             linkedRef.current.set(pixiNode.data.linkedImageNodeId, node.id)
@@ -2121,7 +2168,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       // Trigger AI analysis for nodes that need it (startup retry)
       if (n.type === 'imageNode' && n.data.isPending && !processingRef.current.has(n.id)) {
         processingRef.current.add(n.id)
-        enqueueAI(() => processImage(n.data.imagePath, n.id).finally(() => processingRef.current.delete(n.id)))
+        enqueueAI(() => processImage(n.data.imagePath, n.id).finally(() => processingRef.current.delete(n.id)), n.id)
       }
     })
   }, [addPixiNode, enqueueAI, processImage, animLinkNodes])
@@ -2137,7 +2184,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       const run = reanalyze
         ? () => reanalyzeWithAI(imagePath, nodeId)
         : () => processImage(imagePath, nodeId)
-      enqueueAI(() => run().finally(() => processingRef.current.delete(nodeId)))
+      enqueueAI(() => run().finally(() => processingRef.current.delete(nodeId)), nodeId)
     }
     window.addEventListener('retry-analysis', handler as EventListener)
     return () => window.removeEventListener('retry-analysis', handler as EventListener)
@@ -2295,7 +2342,8 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
                   } catch (e) { console.warn('[lazy load] sprite error:', e) }
                 }
                 loadImg.onerror = () => {}
-                loadImg.src = `file://${lazySrc}`
+                loadImg.crossOrigin = 'anonymous'
+                loadImg.src = mediaUrl(lazySrc)
               }
             }
           }
@@ -2315,8 +2363,20 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
               if (inView) {
                 node.lastSeenAt = now
               } else if (node.lastSeenAt && now - node.lastSeenAt > EVICT_MS) {
-                // Destroy sprite + texture to free GPU memory
-                if (node.sprite && node.container) { node.container.removeChild(node.sprite); node.sprite.destroy(true) }
+                if (node.sprite && node.container) {
+                  node.container.removeChild(node.sprite)
+                  // A textura mora no _textureCache e pode estar em uso por outro nó
+                  // (duplicata: mesma imagem, mesma largura). Destruí-la com o outro
+                  // ainda vivo deixava aquele em branco. Só libera quando é só deste.
+                  const chave = (node.data.thumbnailPath || node.data.imagePath) + ':' + node.width
+                  let compartilhada = false
+                  for (const [, outro] of nodesRef.current) {
+                    if (outro !== node && outro.sprite &&
+                        (outro.data.thumbnailPath || outro.data.imagePath) + ':' + outro.width === chave) { compartilhada = true; break }
+                  }
+                  if (compartilhada) node.sprite.destroy()
+                  else { _textureCache.delete(chave); node.sprite.destroy(true) }
+                }
                 node.sprite = null; node.loaded = false; node.imgLoadStarted = false; node.imgEl = undefined
                 // Redraw placeholder bg
                 node.bg?.clear()
@@ -3181,6 +3241,15 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
     }
 
     const onKey = (e: KeyboardEvent) => {
+      // Digitando num campo (chave de API, nome do canvas, busca)? Nada aqui é
+      // atalho. Sem esta guarda, Backspace apagava a imagem selecionada — do banco
+      // inclusive — e "s"/"m"/"l" alternavam snap, minimapa e lock no meio da
+      // frase. Escape passa: fechar painéis continua valendo com o foco num campo.
+      const alvo = e.target as HTMLElement | null
+      const digitando = !!alvo && (alvo.tagName === 'INPUT' || alvo.tagName === 'TEXTAREA' ||
+        alvo.tagName === 'SELECT' || alvo.isContentEditable)
+      if (digitando && e.key !== 'Escape') return
+
       const ctrl = e.ctrlKey || e.metaKey
       // Ctrl+F — foca a barra de busca (suprime o "localizar" nativo do Chromium)
       if (ctrl && e.key.toLowerCase() === 'f') { e.preventDefault(); searchInputRef.current?.focus(); searchInputRef.current?.select(); return }
@@ -3409,6 +3478,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
 
   // ── Vídeo → cenas ───────────────────────────────────────────────────────
   const [videoExtracting, setVideoExtracting] = useState<string | null>(null)
+  const videoReqRef = useRef<string | null>(null)   // id da extração em curso, para cancelar
   const [videoError, setVideoError] = useState<string | null>(null)
   const [videoScenes, setVideoScenes] = useState<{
     videoPath: string; name: string; screenPos: { x: number; y: number }
@@ -3421,11 +3491,13 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   const runVideoExtract = useCallback(async (videoPath: string, name: string, screenPos: { x: number; y: number }, threshold: number, start: number, end?: number) => {
     setVideoError(null)
     setVideoExtracting(name)
+    const requestId = `video-${uuid()}`
+    videoReqRef.current = requestId
     try {
       // Cobertura: garante ~1 quadro a cada 10% da duração do trecho, mesmo sem cortes
       // de câmera (ex.: cena única de carro em movimento). Cortes detectados somam a isso.
       const maxGap = end != null && end > start ? Math.max(0.5, (end - start) / 10) : undefined
-      const res = await window.api.extractVideoScenes(videoPath, { threshold, maxScenes: 60, start, end, maxGap })
+      const res = await window.api.extractVideoScenes(videoPath, { threshold, maxScenes: 60, start, end, maxGap }, requestId)
       if (!res.frames.length) {
         setVideoScenes(null)
         setVideoError(t('canvas.video.noScenes'))
@@ -3433,10 +3505,14 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       }
       setVideoScenes({ videoPath, name, screenPos, frames: res.frames, capped: res.capped, threshold, start, end })
     } catch (err) {
-      console.error('[video] extração falhou:', err)
       setVideoScenes(null)
-      setVideoError(t('canvas.video.failed'))
+      // Cancelado pelo usuário não é falha: fecha em silêncio.
+      if (!foiCancelado(err)) {
+        console.error('[video] extração falhou:', err)
+        setVideoError(t('canvas.video.failed'))
+      }
     } finally {
+      videoReqRef.current = null
       setVideoExtracting(null)
     }
   }, [])
@@ -4252,6 +4328,12 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
             </svg>
             <div className="text-[12px] text-white/70">{t('canvas.video.detecting')}</div>
             <div className="text-[11px] text-white/35 max-w-[240px] truncate">{videoExtracting}</div>
+            <button
+              onClick={() => { if (videoReqRef.current) void window.api.cancelAI(videoReqRef.current) }}
+              className="mt-1 px-3 py-1 rounded-md text-[11px] text-white/50 hover:text-white/85 hover:bg-white/[0.08] transition-colors cursor-pointer"
+            >
+              {t('common.cancel')}
+            </button>
           </div>
         </div>
       )}
