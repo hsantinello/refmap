@@ -71,6 +71,9 @@ export const pt: Record<I18nKey, string> = {
   'settings.api.keyLabel':        'Chave',
   'settings.api.getKey':          'Gere sua API Key →',
   'settings.api.keyStored':       'Sua chave é salva localmente com criptografia de ponta a ponta.',
+  'settings.api.workspaceLabel':  'Workspace ID (opcional)',
+  'settings.api.workspaceHint':   'A Anthropic passou a exigir o ID do workspace (wrkspc_…) para chaves que não estão ligadas a um workspace. Se a otimização falhar, cole aqui o ID que aparece no console, ou crie uma chave nova já dentro de um workspace.',
+  'settings.api.workspaceLink':   'Abrir workspaces no console →',
 
   'settings.local.installing':    'Instalando IA Local · {message}',
   'settings.local.installFailed': 'Não foi possível instalar a IA local.',
@@ -342,6 +345,8 @@ export const pt: Record<I18nKey, string> = {
   'error.fileNotFound.act':       'Ele pode ter sido movido, renomeado ou apagado. Importe a imagem de novo.',
   'error.noApiKey.msg':           'Nenhuma chave de API está configurada.',
   'error.noApiKey.act':           'Abra as Configurações para conectar uma chave — ou baixe a IA local, que roda no seu PC sem custo.',
+  'error.workspaceId.msg':        'A Anthropic exige o ID do workspace para esta chave.',
+  'error.workspaceId.act':        'Em Configurações → Anthropic, cole o Workspace ID (wrkspc_…) do console da Anthropic — ou crie uma chave nova já ligada a um workspace e salve ela no lugar.',
   'error.keyRejected.msg':        'O provedor de IA recusou a sua chave de API.',
   'error.keyRejected.act':        'Confira em Configurações se a chave está correta e ainda ativa no painel do provedor.',
   'error.noCredits.msg':          'A sua conta no provedor de IA está sem créditos.',

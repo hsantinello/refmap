@@ -98,6 +98,13 @@ const RULES: Rule[] = [
 
   // ── Chave de API ─────────────────────────────────────────────────────────
   {
+    // Anthropic (2026): chave sem workspace precisa do cabeçalho anthropic-workspace-id.
+    test: /anthropic-workspace-id|not scoped to a workspace|workspace.*not found|invalid workspace/i,
+    recovery: 'settings',
+    messageKey: 'error.workspaceId.msg',
+    actionKey: 'error.workspaceId.act',
+  },
+  {
     test: /API key not configured|chave n[ãa]o configurada|Could not resolve authentication/i,
     recovery: 'settings',
     messageKey: 'error.noApiKey.msg',

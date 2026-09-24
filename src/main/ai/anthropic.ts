@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { criarAnthropic } from './anthropicClient'
 import fs from 'fs/promises'
 import path from 'path'
 import { buildVisionPrompt } from './visionPrompt'
@@ -6,7 +6,7 @@ import { buildVisionPrompt } from './visionPrompt'
 export async function analyzeWithAnthropic(imagePath: string, apiKey: string, lang: 'en' | 'pt' = 'en', signal?: AbortSignal): Promise<string> {
   // timeout + capped retries so a slow/hung endpoint fails cleanly instead of
   // leaving the UI spinner analyzing forever (mesmo padrão do openai.ts).
-  const client = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 })
+  const client = criarAnthropic(apiKey, { timeout: 60_000, maxRetries: 1 })
 
   const imageBuffer = await fs.readFile(imagePath)
   const base64 = imageBuffer.toString('base64')

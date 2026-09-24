@@ -1,5 +1,17 @@
 [
   {
+    "version": "0.0.32",
+    "date": "2026-09-24",
+    "items": [
+      "Otimização com a API da Anthropic voltou a funcionar: a Anthropic passou a exigir o ID do workspace para chaves que não estão ligadas a um workspace. Nas Configurações → Anthropic há um campo novo, Workspace ID, com o link do console — ou crie uma chave nova já dentro de um workspace.",
+      "Quando esse for o problema, o app diz exatamente isso em vez de \"não foi possível aprimorar o prompt\"."
+    ],
+    "items_en": [
+      "Optimizing with the Anthropic API works again: Anthropic now requires the workspace ID for keys that are not tied to a workspace. Settings → Anthropic has a new Workspace ID field with a link to the console — or create a new key inside a workspace.",
+      "When that is the problem, the app now says exactly that instead of \"could not enhance the prompt\"."
+    ]
+  },
+  {
     "version": "0.0.31",
     "date": "2026-09-24",
     "items": [

@@ -1,5 +1,4 @@
 import { dialog, safeStorage, BrowserWindow, app } from 'electron'
-import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import sharp from 'sharp'
 import crypto from 'crypto'
@@ -8,6 +7,7 @@ import path from 'path'
 import { canvasQueries, nodeQueries, tagQueries, settingQueries, aiCacheQueries } from '../db'
 import { extractMetadata } from '../metadata'
 import { analyzeWithAnthropic } from '../ai/anthropic'
+import { criarAnthropic } from '../ai/anthropicClient'
 import { analyzeWithOpenAI } from '../ai/openai'
 import { MODEL_PROMPT_CONFIGS, IMAGE_MODEL_IDS } from '../ai/model-prompts'
 import { getLocalConfig, getLocalTextConfig, localChat, isLocalUnavailable, LOCAL_AI_UNAVAILABLE } from '../ai/local'
@@ -480,7 +480,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
           { role: 'user', content: user },
         ], signal)
       } else if (effectiveProvider === 'anthropic') {
-        const client = new Anthropic({ apiKey })
+        const client = criarAnthropic(apiKey)
         const message = await client.messages.create({
           model: 'claude-haiku-4-5-20251001',
           max_tokens: 2048,
@@ -573,7 +573,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
 
     try {
       if (effectiveProvider === 'anthropic' && !useLocal) {
-        const client = new Anthropic({ apiKey })
+        const client = criarAnthropic(apiKey)
         const block = (p: string) => {
           const { b64, ext } = readB64(p)
           return { type: 'image' as const, source: { type: 'base64' as const, media_type: `image/${ext}` as 'image/jpeg', data: b64 } }
@@ -636,7 +636,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
     if (useLocal) {
       raw = await localChat([{ role: 'user', content: prompt }])
     } else if (effectiveProvider === 'anthropic') {
-      const client = new Anthropic({ apiKey })
+      const client = criarAnthropic(apiKey)
       const msg = await client.messages.create({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 2048,

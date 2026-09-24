@@ -71,6 +71,9 @@ export const en = {
   'settings.api.keyLabel':        'Key',
   'settings.api.getKey':          'Get your API Key →',
   'settings.api.keyStored':       'Your key is stored locally with end-to-end encryption.',
+  'settings.api.workspaceLabel':  'Workspace ID (optional)',
+  'settings.api.workspaceHint':   'Anthropic now requires the workspace ID (wrkspc_…) for keys that are not tied to a workspace. If optimizing fails, paste here the ID shown in the console, or create a new key inside a workspace.',
+  'settings.api.workspaceLink':   'Open workspaces in the console →',
 
   'settings.local.installing':    'Installing Local AI · {message}',
   'settings.local.installFailed': 'Could not install the local AI.',
@@ -347,6 +350,8 @@ export const en = {
   'error.fileNotFound.act':       'It may have been moved, renamed or deleted. Import the image again.',
   'error.noApiKey.msg':           'No API key is configured.',
   'error.noApiKey.act':           'Open Settings to connect a key — or download the local AI, which runs on your PC for free.',
+  'error.workspaceId.msg':        'Anthropic requires the workspace ID for this key.',
+  'error.workspaceId.act':        'In Settings → Anthropic, paste the Workspace ID (wrkspc_…) from the Anthropic console — or create a new key already tied to a workspace and save that one instead.',
   'error.keyRejected.msg':        'The AI provider rejected your API key.',
   'error.keyRejected.act':        'Check in Settings that the key is correct and still active in the provider dashboard.',
   'error.noCredits.msg':          'Your account with the AI provider is out of credit.',

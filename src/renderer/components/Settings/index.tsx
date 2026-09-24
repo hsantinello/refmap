@@ -25,6 +25,9 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
   // texto de fundo do campo. Salvar só grava quando há uma chave nova digitada.
   const [apiKey, setApiKey] = useState('')
   const [chaveSalva, setChaveSalva] = useState<string | null>(null)
+  // Só Anthropic: chaves sem workspace precisam do ID (wrkspc_…) em toda chamada.
+  const [workspaceId, setWorkspaceId] = useState('')
+  const [workspaceSalvo, setWorkspaceSalvo] = useState('')
   const [saved, setSaved] = useState(false)
   const [showKey, setShowKey] = useState(false)
   const [closing, setClosing] = useState(false)
@@ -42,6 +45,8 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
       const savedProvider = (await window.api.getSetting('aiProvider')) as 'anthropic' | 'openai' | 'together' | null
       if (savedProvider) setProvider(savedProvider)
       setChaveSalva(await window.api.getApiKey(savedProvider ?? 'anthropic'))
+      const ws = ((await window.api.getSetting('anthropicWorkspaceId')) ?? '').trim()
+      setWorkspaceId(ws); setWorkspaceSalvo(ws)
     }
     load()
   }, [])
@@ -71,8 +76,16 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
     onUninstallLocal?.()
   }
 
+  const workspaceAlterado = provider === 'anthropic' && workspaceId.trim() !== workspaceSalvo
+  const podeSalvar = !!apiKey.trim() || workspaceAlterado
+
   const handleSave = async () => {
-    await window.api.setApiKey(provider, apiKey)
+    // Chave em branco NÃO apaga a salva: o botão também serve só para o workspace.
+    if (apiKey.trim()) await window.api.setApiKey(provider, apiKey)
+    if (provider === 'anthropic') {
+      await window.api.setSetting('anthropicWorkspaceId', workspaceId.trim())
+      setWorkspaceSalvo(workspaceId.trim())
+    }
     await window.api.setSetting('aiProvider', provider)
     onKeySaved?.()
     setSaved(true)
@@ -372,6 +385,28 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                   </svg>
                   {t('settings.api.keyStored')}
                 </p>
+                {provider === 'anthropic' && (
+                  <div className="mt-4">
+                    <label className="block text-[11px] text-white/60 uppercase tracking-widest font-medium mb-2">
+                      {t('settings.api.workspaceLabel')}
+                    </label>
+                    <input
+                      type="text"
+                      value={workspaceId}
+                      onChange={e => setWorkspaceId(e.target.value)}
+                      placeholder="wrkspc_…"
+                      spellCheck={false}
+                      style={{ paddingTop: '6px', paddingBottom: '6px', paddingLeft: '14px' }}
+                      className="w-full bg-white/[0.08] rounded-lg text-sm text-white/90 placeholder:text-white/25 outline-none focus:bg-white/[0.12] transition-all font-mono"
+                    />
+                    <p className="text-[11px] text-white/30 mt-2 leading-relaxed">
+                      {t('settings.api.workspaceHint')}{' '}
+                      <button onClick={() => window.api.openExternal('https://platform.claude.com/settings/workspaces')} className="text-white/55 hover:text-white/85 underline underline-offset-2 transition-colors">
+                        {t('settings.api.workspaceLink')}
+                      </button>
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -379,12 +414,12 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
             <div className="flex gap-2" style={{ padding: '0 15px 15px' }}>
               <button
                 onClick={handleSave}
-                disabled={!apiKey.trim()}
+                disabled={!podeSalvar}
                 style={{ paddingTop: '10px', paddingBottom: '10px' }}
                 className={`flex-1 rounded-lg text-sm font-medium transition-all ${
                   saved
                     ? 'bg-green-500/20 text-green-400'
-                    : apiKey.trim()
+                    : podeSalvar
                       ? 'bg-white/[0.08] text-white/90 hover:bg-white/[0.12] hover:text-white'
                       : 'bg-white/[0.03] text-white/20 cursor-not-allowed'
                 }`}

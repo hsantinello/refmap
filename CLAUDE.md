@@ -203,6 +203,12 @@ main resolve pelo idioma do SO (`app.getLocale()`) e o renderer lê via
 
 É inglês **de propósito** — vocabulário que vai para o modelo de IA:
 
+- **Todo cliente Anthropic nasce em `ai/anthropicClient.ts` (`criarAnthropic`)**,
+  nunca `new Anthropic(...)` solto: desde 2026 a API exige o cabeçalho
+  `anthropic-workspace-id` para chaves não ligadas a um workspace, e a resposta
+  400 NÃO traz o ID (sem descoberta automática). O usuário informa o ID na
+  setting `anthropicWorkspaceId` (Configurações → Anthropic) ou cria uma chave
+  já dentro de um workspace. `friendlyError` reconhece esse 400.
 - `ai/model-prompts.ts` e `ai/visionPrompt.ts` — system prompts das APIs.
   Um perfil de modelo novo do otimizador exige TRÊS lugares em sincronia:
   `MODEL_PROMPT_CONFIGS` + `IMAGE_MODEL_IDS` (se for imagem) em
