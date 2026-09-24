@@ -25,9 +25,6 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
   // texto de fundo do campo. Salvar só grava quando há uma chave nova digitada.
   const [apiKey, setApiKey] = useState('')
   const [chaveSalva, setChaveSalva] = useState<string | null>(null)
-  // Só Anthropic: chaves sem workspace precisam do ID (wrkspc_…) em toda chamada.
-  const [workspaceId, setWorkspaceId] = useState('')
-  const [workspaceSalvo, setWorkspaceSalvo] = useState('')
   const [saved, setSaved] = useState(false)
   const [showKey, setShowKey] = useState(false)
   const [closing, setClosing] = useState(false)
@@ -45,8 +42,6 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
       const savedProvider = (await window.api.getSetting('aiProvider')) as 'anthropic' | 'openai' | 'together' | null
       if (savedProvider) setProvider(savedProvider)
       setChaveSalva(await window.api.getApiKey(savedProvider ?? 'anthropic'))
-      const ws = ((await window.api.getSetting('anthropicWorkspaceId')) ?? '').trim()
-      setWorkspaceId(ws); setWorkspaceSalvo(ws)
     }
     load()
   }, [])
@@ -76,16 +71,11 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
     onUninstallLocal?.()
   }
 
-  const workspaceAlterado = provider === 'anthropic' && workspaceId.trim() !== workspaceSalvo
-  const podeSalvar = !!apiKey.trim() || workspaceAlterado
+  const podeSalvar = !!apiKey.trim()
 
   const handleSave = async () => {
-    // Chave em branco NÃO apaga a salva: o botão também serve só para o workspace.
+    // Chave em branco nunca apaga a salva.
     if (apiKey.trim()) await window.api.setApiKey(provider, apiKey)
-    if (provider === 'anthropic') {
-      await window.api.setSetting('anthropicWorkspaceId', workspaceId.trim())
-      setWorkspaceSalvo(workspaceId.trim())
-    }
     await window.api.setSetting('aiProvider', provider)
     onKeySaved?.()
     setSaved(true)
@@ -386,24 +376,12 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                   {t('settings.api.keyStored')}
                 </p>
                 {provider === 'anthropic' && (
-                  <div className="mt-4">
-                    <label className="block text-[11px] text-white/60 uppercase tracking-widest font-medium mb-2">
-                      {t('settings.api.workspaceLabel')}
-                    </label>
-                    <input
-                      type="text"
-                      value={workspaceId}
-                      onChange={e => setWorkspaceId(e.target.value)}
-                      placeholder="wrkspc_…"
-                      spellCheck={false}
-                      style={{ paddingTop: '6px', paddingBottom: '6px', paddingLeft: '14px' }}
-                      className="w-full bg-white/[0.08] rounded-lg text-sm text-white/90 placeholder:text-white/25 outline-none focus:bg-white/[0.12] transition-all font-mono"
-                    />
-                    <p className="text-[11px] text-white/30 mt-2 leading-relaxed">
-                      {t('settings.api.workspaceHint')}{' '}
-                      <button onClick={() => window.api.openExternal('https://platform.claude.com/settings/workspaces')} className="text-white/55 hover:text-white/85 underline underline-offset-2 transition-colors">
-                        {t('settings.api.workspaceLink')}
-                      </button>
+                  // A Anthropic recusa chaves com escopo "Organização" (exigem um
+                  // cabeçalho de workspace que ninguém vai configurar). A chave
+                  // tem de nascer dentro do workspace Default.
+                  <div className="mt-3 rounded-lg px-3 py-2.5" style={{ background: 'rgba(249,115,22,0.07)', border: '1px solid rgba(249,115,22,0.22)' }}>
+                    <p className="text-[11px] text-orange-200/85 leading-relaxed">
+                      {t('settings.api.anthropicDefaultWs')}
                     </p>
                   </div>
                 )}

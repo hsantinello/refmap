@@ -1,5 +1,17 @@
 [
   {
+    "version": "0.0.33",
+    "date": "2026-09-24",
+    "items": [
+      "Chave da Anthropic: a tela agora explica que a chave precisa ser criada dentro do workspace \"Default\" no console (chaves com escopo \"Organização\" são recusadas pela Anthropic). O campo de Workspace ID foi removido — não é mais necessário.",
+      "O erro, quando esse for o motivo, diz exatamente o que fazer."
+    ],
+    "items_en": [
+      "Anthropic key: the screen now explains that the key must be created inside the \"Default\" workspace in the console (\"Organization\"-scoped keys are rejected by Anthropic). The Workspace ID field was removed — it is no longer needed.",
+      "The error, when that is the cause, says exactly what to do."
+    ]
+  },
+  {
     "version": "0.0.32",
     "date": "2026-09-24",
     "items": [
