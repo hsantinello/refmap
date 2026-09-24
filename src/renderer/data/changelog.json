@@ -1,5 +1,15 @@
 [
   {
+    "version": "0.0.31",
+    "date": "2026-09-24",
+    "items": [
+      "Correção urgente: na 0.0.30 o canvas não abria (\"Não foi possível iniciar o canvas\"). Uma proteção nova do app bloqueava um recurso que o motor de desenho usa por dentro. Se você está vendo essa tela, basta atualizar."
+    ],
+    "items_en": [
+      "Hotfix: in 0.0.30 the canvas would not open (\"Could not start the canvas\"). A new app protection blocked something the drawing engine uses internally. If you are seeing that screen, just update."
+    ]
+  },
+  {
     "version": "0.0.30",
     "date": "2026-09-24",
     "items": [

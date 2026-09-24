@@ -259,6 +259,15 @@ renderer e todo o main. Arquivo novo com texto de interface: acrescente na lista
 
 ## Segurança do processo main
 
+**CSP do renderer** (`electron.vite.config.ts`, injetada só no build): `script-src`
+sem `'unsafe-eval'`. O PixiJS 8 gera shaders/uniforms com `new Function`, então
+`src/renderer/main.tsx` importa `'pixi.js/unsafe-eval'` ANTES de qualquer outra
+coisa — sem isso o canvas morre com "Current environment does not allow
+unsafe-eval" (foi a v0.0.30, hotfix na 0.0.31). Qualquer teste do canvas precisa
+rodar DEPOIS do login; os e2e pré-login não pegam isso. Harness que reproduz:
+`scratchpad/pixi-csp` (Pixi real sob a mesma CSP, com e sem o módulo).
+
+
 Regras em `src/main/security.ts`. A premissa: o que roda na janela do app é
 confiável; qualquer outra coisa que consiga ser carregada nela não é.
 
