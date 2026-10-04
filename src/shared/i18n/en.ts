@@ -38,8 +38,8 @@ export const en = {
   'topbar.newCanvas.tooltip':     'New canvas',
   'topbar.newCanvas.name':        'New Canvas',
 
-  'topbar.removeKey.title':       'Remove the API key?',
-  'topbar.removeKey.message':     'The app will stop using cloud AI. You can paste the key back at any time, or use the local AI that runs on your PC.',
+  'topbar.removeKey.title':       'Remove the {provider} key?',
+  'topbar.removeKey.message':     'The key is deleted from this computer. Your other saved connections stay in the menu, and you can paste this key back at any time.',
 
   'topbar.deleteCanvas.title':    'Delete "{name}"?',
   'topbar.deleteCanvas.message':  'Every image and tag in this canvas will be lost. This action cannot be undone.',
@@ -49,6 +49,11 @@ export const en = {
   'topbar.connection.api':        'API Connected',
   'topbar.connection.local':      'Local AI',
   'topbar.connection.none':       'Set up your Ref Map',
+  'topbar.conn.header':           'Connections',
+  'topbar.conn.add':              'Connect a new API',
+  'topbar.conn.remove':           'Remove this key',
+  'topbar.conn.localInstall':     'Local AI — install',
+  'topbar.conn.localModels':      'Local AI models',
 
   // ── Configurações ─────────────────────────────────────────────────────────
   'settings.title.choose':        'How do you want to use the app?',
@@ -417,6 +422,8 @@ export const en = {
   'canvas.anim.button':           'Prompt between images',
   'canvas.anim.transitions':      ' · {count} transitions',
   'canvas.anim.transitionHeader': 'Transition {from} → {to}',
+  'canvas.anim.failed':           'Could not generate the prompt between the images.',
+  'canvas.anim.empty':            'The AI returned no prompt. Try again.',
 
   'canvas.analysis.progress':     'Analyzing {done}/{total}',
   'canvas.analysis.remaining':    ' · ~{sec}s left',

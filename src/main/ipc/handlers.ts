@@ -8,10 +8,11 @@ import { canvasQueries, nodeQueries, tagQueries, settingQueries, aiCacheQueries 
 import { extractMetadata } from '../metadata'
 import { analyzeWithAnthropic } from '../ai/anthropic'
 import { criarAnthropic } from '../ai/anthropicClient'
-import { analyzeWithOpenAI } from '../ai/openai'
+import { analyzeWithOpenAI, TOGETHER_VISION_MODELS, VISION_MAX_TOKENS, semRaciocinio } from '../ai/openai'
 import { MODEL_PROMPT_CONFIGS, IMAGE_MODEL_IDS } from '../ai/model-prompts'
 import { getLocalConfig, getLocalTextConfig, localChat, isLocalUnavailable, LOCAL_AI_UNAVAILABLE } from '../ai/local'
 import { installLocalAI, uninstallLocal } from '../ai/localInstall'
+import { resolverChaveAtiva } from '../ai/chaves'
 import { abrirOperacao, fecharOperacao, cancelarOperacao, foiCancelado, ABORTED } from '../ai/cancel'
 import { extractScenes, extractFrameAt } from '../video/extractScenes'
 import { tm, setMainLang, getMainLang } from '../i18n'
@@ -188,32 +189,12 @@ export function registerHandlers(janela: BrowserWindow): void {
     const signal = abrirOperacao(requestId)
     try {
 
-      const provider = settingQueries.get('aiProvider') || 'anthropic'
-
       const encryptedAnthropic = settingQueries.get('apiKey_anthropic')
       const encryptedOpenAI = settingQueries.get('apiKey_openai')
 
-      const decryptKey = (enc: unknown): string => {
-        if (!enc || typeof enc !== 'string') return ''
-        try { return safeStorage.decryptString(Buffer.from(enc, 'hex')).trim() } catch { return '' }
-      }
-
-      // Resolve which key to use for vision. Prefer the active provider's key;
-      // only fall back to another provider's key when the active one is missing
-      // or blank. A blank/revoked key must NOT silently route to OpenAI — it
-      // yields a clean "not configured" error instead of a raw 401.
-      // Rastreia o provider da chave EFETIVAMENTE resolvida: se a chave do
-      // provider ativo falta, cai para outra chave — mas o dispatch abaixo tem
-      // que rotear para o SDK dessa chave, senão manda sk- da OpenAI ao endpoint
-      // Anthropic (401).
-      let effectiveProvider = provider
-      let apiKey = decryptKey(settingQueries.get(`apiKey_${provider}`))
-      if (!apiKey) {
-        const aKey = decryptKey(encryptedAnthropic)
-        const oKey = decryptKey(encryptedOpenAI)
-        if (aKey) { apiKey = aKey; effectiveProvider = 'anthropic' }
-        else if (oKey) { apiKey = oKey; effectiveProvider = 'openai' }
-      }
+      // Chave e provedor EFETIVOS (o dispatch abaixo roteia pelo SDK da chave
+      // resolvida — senão manda sk- da OpenAI ao endpoint da Anthropic: 401).
+      const { apiKey, effectiveProvider } = resolverChaveAtiva()
 
       const isTogetherKey = apiKey.startsWith('tgp_')
 
@@ -230,16 +211,9 @@ export function registerHandlers(janela: BrowserWindow): void {
           throw err
         }
       } else if (isTogetherKey) {
-        // Try Together AI vision models in order until one works. These are the
-        // multimodal models that are actually SERVERLESS on Together — verified by
-        // sending a real image to /v1/chat/completions. Counterintuitively, the
-        // "*-VL" and Llama-4/3.2-Vision models are dedicated-only (they return a
-        // 400 "non-serverless model" error), while these smaller multimodal chat
-        // models work serverless. gemma-3n gives the richest descriptions.
-        const togetherVisionModels = [
-          'google/gemma-3n-E4B-it',
-          'MiniMaxAI/MiniMax-M3',
-        ]
+        // Tenta os modelos de visão serverless do Together em ordem (lista e motivo
+        // em TOGETHER_VISION_MODELS, ai/openai.ts).
+        const togetherVisionModels = TOGETHER_VISION_MODELS
         tags = ''
         let lastErr: unknown = null
         // Only genuine transient errors are worth retrying. The 400 "Unable to
@@ -332,24 +306,9 @@ export function registerHandlers(janela: BrowserWindow): void {
     // JSON só quando o modelo declara a variante; senão cai na prosa.
     const asJson = format === 'json' && !!config.jsonSystemPrompt
 
-    const provider = settingQueries.get('aiProvider') || 'anthropic'
-    // Resolve a chave: provider ativo, senão qualquer outra chave de nuvem salva.
-    const decryptKey = (enc: unknown): string => {
-      if (!enc || typeof enc !== 'string') return ''
-      try { return safeStorage.decryptString(Buffer.from(enc, 'hex')).trim() } catch { return '' }
-    }
-    let apiKey = decryptKey(settingQueries.get(`apiKey_${provider}`))
-    let effectiveProvider = provider as string
-    if (!apiKey) {
-      const aKey = decryptKey(settingQueries.get('apiKey_anthropic'))
-      const oKey = decryptKey(settingQueries.get('apiKey_openai'))
-      if (aKey) { apiKey = aKey; effectiveProvider = 'anthropic' }
-      else if (oKey) { apiKey = oKey; effectiveProvider = 'openai' }
-    }
-    // Sem nenhuma chave de nuvem → usa IA local (Ollama).
+    // Sem chave (ou com a IA local escolhida) → Ollama. Chave "tgp_" vai ao Together.
+    const { apiKey, effectiveProvider } = resolverChaveAtiva()
     const useLocal = !apiKey
-    // Together AI keys start with "tgp_" — auto-route regardless of which slot they were saved in
-    if (apiKey.startsWith('tgp_')) effectiveProvider = 'together'
 
     // Remove markdown/special characters from the prompt
     const cleanPrompt = (text: string): string =>
@@ -547,40 +506,29 @@ The sections, element lists, formulas and examples above describe the FULL vocab
   // descrevendo a transição — para workflows image-to-video de first/last frame.
   handleSeguro('prompt:animate', async (_e, firstPath: string, lastPath: string, requestId?: string): Promise<string> => {
     const signal = abrirOperacao(requestId)
-    const provider = settingQueries.get('aiProvider') || 'anthropic'
-    const decryptKey = (enc: unknown): string => {
-      if (!enc || typeof enc !== 'string') return ''
-      try { return safeStorage.decryptString(Buffer.from(enc, 'hex')).trim() } catch { return '' }
-    }
-    let apiKey = decryptKey(settingQueries.get(`apiKey_${provider}`))
-    let effectiveProvider = provider as string
-    if (!apiKey) {
-      const aKey = decryptKey(settingQueries.get('apiKey_anthropic'))
-      const oKey = decryptKey(settingQueries.get('apiKey_openai'))
-      if (aKey) { apiKey = aKey; effectiveProvider = 'anthropic' }
-      else if (oKey) { apiKey = oKey; effectiveProvider = 'openai' }
-    }
+    // Sem chave (ou com a IA local escolhida) → Ollama.
+    const { apiKey, effectiveProvider } = resolverChaveAtiva()
     const useLocal = !apiKey
-    if (apiKey.startsWith('tgp_')) effectiveProvider = 'together'
 
     const instruction = `You are given the FIRST frame and the LAST frame of a short video clip, in that order. Write ONE detailed MOTION prompt in English describing the animation/transition FROM the first frame TO the last frame: what moves and how, camera movement (pan/zoom/dolly/orbit), changes in pose, expression, lighting and background, and the overall pacing. Focus on the MOVEMENT and the transition between the two frames — do NOT merely describe the static images. Make it a single flowing prompt suitable for a first-last-frame image-to-video model. Return ONLY the prompt, no preamble, no headings.`
 
-    const readB64 = (p: string) => {
-      const buf = fs.readFileSync(p)
-      const ext = path.extname(p).slice(1).toLowerCase()
-      return { b64: buf.toString('base64'), ext: ext === 'jpg' ? 'jpeg' : ext }
+    // Reduz cada quadro antes de enviar: uma imagem de 4K em PNG passa do limite
+    // de 5 MB da Anthropic e deixa a IA local lenta. JPEG 1280px basta para ler movimento.
+    const readB64 = async (p: string) => {
+      const buf = await sharp(p).rotate().resize(1280, 1280, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer()
+      return buf.toString('base64')
     }
 
     try {
+      const [firstB64, lastB64] = await Promise.all([readB64(firstPath), readB64(lastPath)])
+
       if (effectiveProvider === 'anthropic' && !useLocal) {
         const client = criarAnthropic(apiKey)
-        const block = (p: string) => {
-          const { b64, ext } = readB64(p)
-          return { type: 'image' as const, source: { type: 'base64' as const, media_type: `image/${ext}` as 'image/jpeg', data: b64 } }
-        }
+        const block = (b64: string) =>
+          ({ type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/jpeg' as const, data: b64 } })
         const msg = await client.messages.create({
           model: 'claude-haiku-4-5-20251001', max_tokens: 1024,
-          messages: [{ role: 'user', content: [block(firstPath), block(lastPath), { type: 'text', text: instruction }] }],
+          messages: [{ role: 'user', content: [block(firstB64), block(lastB64), { type: 'text', text: instruction }] }],
         }, signal ? { signal } : undefined)
         const b = msg.content[0]
         return b?.type === 'text' ? b.text.trim() : ''
@@ -590,18 +538,35 @@ The sections, element lists, formulas and examples above describe the FULL vocab
       const cfg = useLocal ? getLocalConfig() : null
       const baseURL = useLocal ? cfg!.baseURL : (effectiveProvider === 'together' ? 'https://api.together.xyz/v1' : undefined)
       const key = useLocal ? cfg!.apiKey : apiKey
-      const model = useLocal ? cfg!.model : (effectiveProvider === 'together' ? 'google/gemma-3n-E4B-it' : 'gpt-4o-mini')
-      const client = new OpenAI({ apiKey: key, ...(baseURL ? { baseURL } : {}), timeout: 120_000, maxRetries: useLocal ? 0 : 1 })
-      const url = (p: string) => { const { b64, ext } = readB64(p); return `data:image/${ext};base64,${b64}` }
-      const completion = await client.chat.completions.create({
-        model, max_tokens: 1024,
-        messages: [{ role: 'user', content: [
-          { type: 'image_url', image_url: { url: url(firstPath) } },
-          { type: 'image_url', image_url: { url: url(lastPath) } },
-          { type: 'text', text: instruction },
-        ] }],
-      }, signal ? { signal } : undefined)
-      return completion.choices[0]?.message?.content?.trim() ?? ''
+      // Together: mesma lista de modelos de visão serverless da análise de imagem —
+      // se o primeiro recusar (fora do ar, não-serverless, limite), tenta o próximo.
+      const models = useLocal ? [cfg!.model]
+        : effectiveProvider === 'together' ? TOGETHER_VISION_MODELS
+        : ['gpt-4o-mini']
+      // A IA local atende um pedido por vez: se a análise automática das imagens
+      // estiver na fila do Ollama, o prompt espera atrás dela. 120 s não bastava.
+      const client = new OpenAI({ apiKey: key, ...(baseURL ? { baseURL } : {}), timeout: useLocal ? 300_000 : 90_000, maxRetries: useLocal ? 0 : 1 })
+      let lastErr: unknown = null
+      for (const model of models) {
+        try {
+          const completion = await client.chat.completions.create({
+            model, max_tokens: VISION_MAX_TOKENS,
+            messages: [{ role: 'user', content: [
+              { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${firstB64}` } },
+              { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${lastB64}` } },
+              { type: 'text', text: instruction },
+            ] }],
+          }, signal ? { signal } : undefined)
+          const text = semRaciocinio(completion.choices[0]?.message?.content ?? '')
+          if (text) return text
+          lastErr = new Error(`empty response from ${model}`)
+        } catch (err) {
+          if (foiCancelado(signal, err)) throw err
+          lastErr = err
+          console.warn(`[prompt:animate] "${model}" falhou:`, err instanceof Error ? err.message : err)
+        }
+      }
+      throw lastErr
     } catch (err) {
       if (foiCancelado(signal, err)) throw new Error(ABORTED)
       if (useLocal && isLocalUnavailable(err)) throw new Error(LOCAL_AI_UNAVAILABLE)
@@ -613,21 +578,9 @@ The sections, element lists, formulas and examples above describe the FULL vocab
 
   // ── Tag translation ───────────────────────────────────────────────────
   handleSeguro('tags:translate', async (_e, values: string[], targetLang: 'pt' | 'en') => {
-    const provider = settingQueries.get('aiProvider') || 'anthropic'
-    const decryptKey = (enc: unknown): string => {
-      if (!enc || typeof enc !== 'string') return ''
-      try { return safeStorage.decryptString(Buffer.from(enc, 'hex')).trim() } catch { return '' }
-    }
-    let apiKey = decryptKey(settingQueries.get(`apiKey_${provider}`))
-    let effectiveProvider = provider as string
-    if (!apiKey) {
-      const aKey = decryptKey(settingQueries.get('apiKey_anthropic'))
-      const oKey = decryptKey(settingQueries.get('apiKey_openai'))
-      if (aKey) { apiKey = aKey; effectiveProvider = 'anthropic' }
-      else if (oKey) { apiKey = oKey; effectiveProvider = 'openai' }
-    }
+    // Sem chave (ou com a IA local escolhida) → Ollama. Chave "tgp_" vai ao Together.
+    const { apiKey, effectiveProvider } = resolverChaveAtiva()
     const useLocal = !apiKey
-    if (apiKey.startsWith('tgp_')) effectiveProvider = 'together'
 
     const langLabel = targetLang === 'pt' ? 'Brazilian Portuguese' : 'English'
     const prompt = `Translate each of the following image generation prompt tags to ${langLabel}. Return ONLY a JSON array of strings in the same order, no explanation:\n${JSON.stringify(values)}`

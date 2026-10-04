@@ -308,6 +308,24 @@ Imagem colada vai para `userData/pasted` (não para o temp, que o Windows limpa)
 `activate` (macOS) só `setMainWindow`/`setUpdaterWindow` apontam para a janela nova.
 Todo canal IPC deve ler `win` da variável de módulo, nunca capturar a janela.
 
+## Conexões de IA (chaves e IA local)
+
+- Cada provedor guarda a PRÓPRIA chave (`apiKey_anthropic`, `apiKey_openai`,
+  `apiKey_together`); trocar de conexão não apaga as outras. A setting
+  `aiProvider` diz qual vale agora e pode ser `'local'` (IA local escolhida
+  mesmo havendo chaves). Todo handler resolve a chave por
+  `resolverChaveAtiva()` (`src/main/ai/chaves.ts`) — não copie a lógica.
+- Menu "Conexões" no botão da TopBar: lista as chaves salvas (mascaradas), IA
+  local (hover mostra os modelos; lixeira desinstala) e "Conectar nova API".
+  Nomes dos provedores em `renderer/lib/provedores.ts`.
+- **Together muda o catálogo serverless sem aviso.** Em out/2026 só
+  `MiniMax-M3` e `Kimi-K3` (caro, reserva) aceitavam imagem; gemma-3n/gemma-3,
+  Qwen-VL e Llama-4 davam 400 "non-serverless". O MiniMax-M3 raciocina antes de
+  responder: com `max_tokens` 1024 devolvia texto VAZIO. Lista e limite em
+  `TOGETHER_VISION_MODELS`/`VISION_MAX_TOKENS` (`ai/openai.ts`). Para conferir,
+  mande uma imagem real a `/v1/chat/completions` — `/v1/models` lista modelos
+  que não são serverless.
+
 ## Integração ComfyUI (painel "ComfyUI" na barra)
 
 - O catálogo NÃO é uma lista fixa: é montado do índice oficial de templates

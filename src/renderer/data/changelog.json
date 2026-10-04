@@ -1,5 +1,23 @@
 [
   {
+    "version": "0.0.34",
+    "date": "2026-10-03",
+    "items": [
+      "Conexões: o botão de conexão na barra agora abre um menu com todas as chaves de API salvas (Claude, ChatGPT, Together AI) e a IA local. É só clicar para trocar — conectar uma API nova não apaga mais as outras.",
+      "A IA local pode ser escolhida mesmo com chaves salvas, desinstalada pelo mesmo menu, e passar o mouse sobre ela mostra o que cada modelo local faz.",
+      "Prompt entre imagens voltou a funcionar com o Together AI e com a IA local, inclusive enquanto as imagens ainda estão sendo analisadas. Quando algo dá errado, o app agora avisa em vez de não fazer nada.",
+      "O botão \"Prompt entre imagens\" também aparece quando as imagens são selecionadas com Ctrl + arrastar dentro de um grupo.",
+      "Análise de imagens com o Together AI voltou a funcionar."
+    ],
+    "items_en": [
+      "Connections: the connection button in the top bar now opens a menu with all your saved API keys (Claude, ChatGPT, Together AI) and the local AI. Just click to switch — connecting a new API no longer deletes the others.",
+      "The local AI can be chosen even with saved keys, uninstalled from the same menu, and hovering over it shows what each local model does.",
+      "Prompt between images works again with Together AI and with the local AI, even while images are still being analyzed. When something goes wrong, the app now tells you instead of doing nothing.",
+      "The \"Prompt between images\" button also shows up when images are selected with Ctrl + drag inside a group.",
+      "Image analysis with Together AI works again."
+    ]
+  },
+  {
     "version": "0.0.33",
     "date": "2026-09-24",
     "items": [

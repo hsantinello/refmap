@@ -3,6 +3,19 @@ import fs from 'fs/promises'
 import path from 'path'
 import { buildVisionPrompt } from './visionPrompt'
 
+// Modelos de visão SERVERLESS no Together (conferido em 03/10/2026 enviando imagem
+// real a /v1/chat/completions). gemma-3n, gemma-3, Qwen-VL e Llama-4 passaram a
+// responder 400 "non-serverless model". O MiniMax-M3 raciocina antes de responder:
+// com max_tokens 1024 gastava tudo pensando e devolvia texto VAZIO — por isso
+// VISION_MAX_TOKENS é folgado. Kimi-K3 é ~9x mais caro: fica só de reserva.
+export const TOGETHER_VISION_MODELS = ['MiniMaxAI/MiniMax-M3', 'moonshotai/Kimi-K3']
+export const VISION_MAX_TOKENS = 4096
+
+// Alguns modelos de raciocínio deixam o <think>…</think> dentro do texto.
+export function semRaciocinio(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+}
+
 export async function analyzeWithOpenAI(
   imagePath: string,
   apiKey: string,
@@ -33,7 +46,7 @@ export async function analyzeWithOpenAI(
 
   const response = await client.chat.completions.create({
     model,
-    max_tokens: 1024,
+    max_tokens: VISION_MAX_TOKENS,
     messages: [{
       role: 'user',
       content: [
@@ -43,5 +56,5 @@ export async function analyzeWithOpenAI(
     }],
   }, options?.signal ? { signal: options.signal } : undefined)
 
-  return (response.choices[0]?.message?.content ?? '').trim()
+  return semRaciocinio(response.choices[0]?.message?.content ?? '')
 }

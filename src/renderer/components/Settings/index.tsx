@@ -3,6 +3,7 @@ import type { LocalInstallProgress } from '../LocalInstallBanner'
 import { friendlyError } from '../../lib/friendlyError'
 import { confirmar } from '../ConfirmDialog'
 import { useT, useTRich } from '../../i18n'
+import { PROVEDORES, type Provedor } from '../../lib/provedores'
 
 type View = 'choose' | 'api' | 'local'
 
@@ -25,6 +26,8 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
   // texto de fundo do campo. Salvar só grava quando há uma chave nova digitada.
   const [apiKey, setApiKey] = useState('')
   const [chaveSalva, setChaveSalva] = useState<string | null>(null)
+  // Provedores que já têm chave guardada — marcados com um ponto verde na aba.
+  const [comChave, setComChave] = useState<Set<Provedor>>(new Set())
   const [saved, setSaved] = useState(false)
   const [showKey, setShowKey] = useState(false)
   const [closing, setClosing] = useState(false)
@@ -39,9 +42,14 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
 
   useEffect(() => {
     const load = async () => {
-      const savedProvider = (await window.api.getSetting('aiProvider')) as 'anthropic' | 'openai' | 'together' | null
-      if (savedProvider) setProvider(savedProvider)
-      setChaveSalva(await window.api.getApiKey(savedProvider ?? 'anthropic'))
+      // aiProvider pode ser 'local' (IA local escolhida no menu): aí abre na Anthropic.
+      const salvo = (await window.api.getSetting('aiProvider')) as string | null
+      const inicial: Provedor = PROVEDORES.includes(salvo as Provedor) ? salvo as Provedor : 'anthropic'
+      setProvider(inicial)
+      setChaveSalva(await window.api.getApiKey(inicial))
+      const marcados = new Set<Provedor>()
+      for (const p of PROVEDORES) if (await window.api.getApiKey(p)) marcados.add(p)
+      setComChave(marcados)
     }
     load()
   }, [])
@@ -268,6 +276,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                               </svg>
                             )}
                             {p === 'anthropic' ? 'Anthropic' : 'OpenAI'}
+                            {comChave.has(p) && <span className="w-1.5 h-1.5 rounded-full bg-green-400/80" />}
                           </span>
                         </button>
                       ))}
@@ -296,6 +305,7 @@ export default function Settings({ onClose, onKeySaved, initialView, installProg
                           <path d="M16 2C8.268 2 2 8.268 2 16s6.268 14 14 14 14-6.268 14-14S23.732 2 16 2zm0 3.5a10.5 10.5 0 1 1 0 21 10.5 10.5 0 0 1 0-21zm-1 4v7.586l-3.293-3.293-1.414 1.414L16 21.414l5.707-5.707-1.414-1.414L17 17.586V9.5h-2z"/>
                         </svg>
                         Together
+                        {comChave.has('together') && <span className="w-1.5 h-1.5 rounded-full bg-green-400/80" />}
                       </span>
                     </button>
                   </div>

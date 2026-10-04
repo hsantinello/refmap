@@ -5,6 +5,7 @@ import logoUrl from '../../assets/logo.png'
 import { confirmar } from '../ConfirmDialog'
 import UpdateBell from '../UpdateBell'
 import { useT } from '../../i18n'
+import { PROVEDORES, NOME_PROVEDOR, type Provedor } from '../../lib/provedores'
 
 interface TopBarProps {
   onOpenSettings: (view?: 'choose' | 'api' | 'local') => void
@@ -13,12 +14,14 @@ interface TopBarProps {
   hasApiKey: boolean
   apiProviderName?: string
   localActive?: boolean   // sem chave, mas IA local (Ollama) rodando
+  localAvailable?: boolean // IA local instalada e rodando (mesmo com chave ativa)
   localModel?: string
-  onRemoveApiKey: () => void
+  onConnectionChanged: () => void
+  onUninstallLocal: () => void
   onSignOut: () => void
 }
 
-export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, hasApiKey, apiProviderName, localActive, localModel, onRemoveApiKey, onSignOut }: TopBarProps) {
+export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, hasApiKey, apiProviderName, localActive, localAvailable, localModel, onConnectionChanged, onUninstallLocal, onSignOut }: TopBarProps) {
   const [alwaysOnTop, setAlwaysOnTop] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -52,21 +55,83 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
     window.api.setSetting('appLang', next)
   }
 
-  const handleConnectionClick = () => {
-    if (hasApiKey) {
-      void (async () => {
-        const ok = await confirmar({
-          titulo: t('topbar.removeKey.title'),
-          mensagem: t('topbar.removeKey.message'),
-          confirmar: t('common.remove'),
-          perigo: true,
-        })
-        if (ok) onRemoveApiKey()
-      })()
-      return
+  // ── Menu de conexões ─────────────────────────────────────────────────────
+  // Cada provedor guarda a própria chave: trocar de conexão NÃO apaga as outras.
+  // O menu lista as chaves salvas (mascaradas) + IA local; clicar ativa.
+  const [showConn, setShowConn] = useState(false)
+  const [hoverLocal, setHoverLocal] = useState(false)   // painel "o que cada modelo local faz"
+  const [conexoes, setConexoes] = useState<{ id: Provedor; mascara: string }[]>([])
+  const [ativo, setAtivo] = useState<string>('anthropic')
+  const connRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!showConn) { setHoverLocal(false); return }
+    const handleClick = (e: MouseEvent) => {
+      if (connRef.current && !connRef.current.contains(e.target as globalThis.Node)) setShowConn(false)
     }
-    // Sem chave: modo Local → abre a aba Local; senão a tela de escolha.
-    onOpenSettings(localActive ? 'local' : 'choose')
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showConn])
+
+  const carregarConexoes = async () => {
+    const lista: { id: Provedor; mascara: string }[] = []
+    for (const id of PROVEDORES) {
+      const mascara = await window.api.getApiKey(id)
+      if (mascara) lista.push({ id, mascara })
+    }
+    setConexoes(lista)
+    setAtivo(((await window.api.getSetting('aiProvider')) as string | null) ?? 'anthropic')
+    return lista
+  }
+
+  const handleConnectionClick = async () => {
+    if (showConn) { setShowConn(false); return }
+    const lista = await carregarConexoes()
+    // Nada salvo e sem IA local: não há o que escolher → tela de configuração.
+    if (lista.length === 0 && !localAvailable) { onOpenSettings('choose'); return }
+    setShowConn(true)
+  }
+
+  const ativarConexao = async (id: Provedor | 'local') => {
+    setShowConn(false)
+    await window.api.setSetting('aiProvider', id)
+    onConnectionChanged()
+  }
+
+  const removerConexao = async (id: Provedor) => {
+    setShowConn(false)
+    const ok = await confirmar({
+      titulo: t('topbar.removeKey.title', { provider: NOME_PROVEDOR[id] }),
+      mensagem: t('topbar.removeKey.message'),
+      confirmar: t('common.remove'),
+      perigo: true,
+    })
+    if (!ok) return
+    await window.api.setApiKey(id, '')
+    // Apagou a conexão em uso: passa para outra chave salva, senão para a IA local.
+    if (ativo === id) {
+      const outra = conexoes.find(c => c.id !== id)
+      await window.api.setSetting('aiProvider', outra ? outra.id : 'local')
+    }
+    onConnectionChanged()
+  }
+
+  // Desinstala a IA local (mesmo fluxo e confirmação da tela "IA Local").
+  // Se ela era a conexão em uso e há chave salva, passa para essa chave.
+  const desinstalarLocal = async () => {
+    setShowConn(false)
+    const ok = await confirmar({
+      titulo: t('settings.local.uninstall.title'),
+      mensagem: t('settings.local.uninstall.message'),
+      confirmar: t('settings.local.uninstall.confirm'),
+      perigo: true,
+    })
+    if (!ok) return
+    if (ativo === 'local' && conexoes.length > 0) {
+      await window.api.setSetting('aiProvider', conexoes[0].id)
+      onConnectionChanged()
+    }
+    onUninstallLocal()
   }
 
 
@@ -619,6 +684,7 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
       >
         <UpdateBell />
 
+        <div ref={connRef} className="relative no-drag-region">
         <button
           onClick={handleConnectionClick}
           className="no-drag-region flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/[0.04] border border-white/[0.06] hover:bg-white/[0.09] hover:border-white/[0.1] transition-all"
@@ -640,6 +706,104 @@ export default function TopBar({ onOpenSettings, onOpenAbout, onOpenTutorial, ha
                 : t('topbar.connection.none')}
           </span>
         </button>
+
+        {showConn && (
+          <div className="absolute right-0 top-full mt-2 w-[270px] bg-black rounded-xl shadow-[0_25px_50px_-12px_rgba(0,0,0,0.8)] z-50 py-1.5">
+            <div className="px-4 pt-1.5 pb-1 text-[9px] font-bold tracking-widest uppercase text-white/30">{t('topbar.conn.header')}</div>
+
+            {conexoes.map(c => {
+              const on = hasApiKey && ativo === c.id
+              return (
+                <div key={c.id} className="group flex items-center hover:bg-white/[0.05] transition-colors">
+                  <button
+                    onClick={() => ativarConexao(c.id)}
+                    style={{ padding: '9px 0 9px 16px' }}
+                    className="flex-1 min-w-0 flex items-center gap-2.5 text-left cursor-pointer"
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${on ? 'bg-green-400' : 'bg-white/15'}`} />
+                    <span className={`text-[12px] shrink-0 ${on ? 'text-white/90' : 'text-white/60'}`}>{NOME_PROVEDOR[c.id]}</span>
+                    <span className="text-[10px] font-mono text-white/25 truncate">{c.mascara}</span>
+                  </button>
+                  <button
+                    onClick={() => removerConexao(c.id)}
+                    title={t('topbar.conn.remove')}
+                    className="px-3 self-stretch flex items-center text-white/30 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
+                    </svg>
+                  </button>
+                </div>
+              )
+            })}
+
+            {/* IA local: sempre na lista. Sem Ollama, leva à tela de instalação.
+                Passar o mouse mostra os modelos que ela instala e para que serve cada um. */}
+            <div
+              className="relative group flex items-center hover:bg-white/[0.05] transition-colors"
+              onMouseEnter={() => setHoverLocal(true)}
+              onMouseLeave={() => setHoverLocal(false)}
+            >
+            {hoverLocal && (
+              <div className="absolute right-full top-0 mr-2 w-[260px] bg-black rounded-xl shadow-[0_25px_50px_-12px_rgba(0,0,0,0.8)] px-4 py-3 pointer-events-none">
+                <div className="text-[9px] font-bold tracking-widest uppercase text-white/30 mb-2">{t('topbar.conn.localModels')}</div>
+                <ul className="space-y-1.5 text-[11px] text-white/35 leading-relaxed">
+                  {([
+                    ['Gemma 3 4B', t('settings.local.model.vision')],
+                    ['Dolphin Mistral', t('settings.local.model.text')],
+                    ['Whisper', t('settings.local.model.voice')],
+                  ] as const).map(([nome, desc]) => (
+                    <li key={nome} className="flex gap-1.5">
+                      <span className="text-orange-400/60 shrink-0">•</span>
+                      <span><span className="text-white/65">{nome}</span> {desc}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <button
+              onClick={() => {
+                if (localAvailable) { void ativarConexao('local'); return }
+                setShowConn(false)
+                onOpenSettings('local')
+              }}
+              style={{ padding: localAvailable ? '9px 0 9px 16px' : '9px 16px' }}
+              className="flex-1 min-w-0 flex items-center gap-2.5 text-left cursor-pointer"
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={localActive ? '#34D399' : 'rgba(255,255,255,0.3)'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+              </svg>
+              <span className={`text-[12px] shrink-0 ${localActive ? 'text-white/90' : 'text-white/60'}`}>
+                {localAvailable ? t('topbar.connection.local') : t('topbar.conn.localInstall')}
+              </span>
+              {localAvailable && localModel && <span className="text-[10px] font-mono text-white/25 truncate">{localModel}</span>}
+            </button>
+            {localAvailable && (
+              <button
+                onClick={desinstalarLocal}
+                title={t('settings.local.uninstall')}
+                className="px-3 self-stretch flex items-center text-white/30 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
+                </svg>
+              </button>
+            )}
+            </div>
+
+            <div className="h-px bg-white/[0.06] my-1" />
+
+            <button
+              onClick={() => { setShowConn(false); onOpenSettings('api') }}
+              style={{ padding: '9px 16px' }}
+              className="w-full flex items-center gap-2.5 text-left text-[12px] text-white/60 hover:text-white/90 hover:bg-white/[0.05] transition-colors cursor-pointer"
+            >
+              <span className="w-1.5 text-center text-white/40 shrink-0">+</span>
+              {t('topbar.conn.add')}
+            </button>
+          </div>
+        )}
+        </div>
 
       </div>
 

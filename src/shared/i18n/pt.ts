@@ -38,8 +38,8 @@ export const pt: Record<I18nKey, string> = {
   'topbar.newCanvas.tooltip':     'Novo canvas',
   'topbar.newCanvas.name':        'Novo Canvas',
 
-  'topbar.removeKey.title':       'Remover a chave de API?',
-  'topbar.removeKey.message':     'O app deixa de usar a IA na nuvem. Você pode colar a chave de novo a qualquer momento, ou usar a IA local, que roda no seu PC.',
+  'topbar.removeKey.title':       'Remover a chave do {provider}?',
+  'topbar.removeKey.message':     'A chave é apagada deste computador. As outras conexões salvas continuam no menu, e você pode colar esta chave de novo quando quiser.',
 
   'topbar.deleteCanvas.title':    'Apagar "{name}"?',
   'topbar.deleteCanvas.message':  'Todas as imagens e tags deste canvas serão perdidas. Esta ação não pode ser desfeita.',
@@ -49,6 +49,11 @@ export const pt: Record<I18nKey, string> = {
   'topbar.connection.api':        'API Conectada',
   'topbar.connection.local':      'IA Local',
   'topbar.connection.none':       'Configure seu Ref Map',
+  'topbar.conn.header':           'Conexões',
+  'topbar.conn.add':              'Conectar nova API',
+  'topbar.conn.remove':           'Remover esta chave',
+  'topbar.conn.localInstall':     'IA Local — instalar',
+  'topbar.conn.localModels':      'Modelos da IA local',
 
   // ── Configurações ─────────────────────────────────────────────────────────
   'settings.title.choose':        'Como você deseja usar o app?',
@@ -412,6 +417,8 @@ export const pt: Record<I18nKey, string> = {
   'canvas.anim.button':           'Prompt entre imagens',
   'canvas.anim.transitions':      ' · {count} transições',
   'canvas.anim.transitionHeader': 'Transição {from} → {to}',
+  'canvas.anim.failed':           'Não consegui gerar o prompt entre as imagens.',
+  'canvas.anim.empty':            'A IA não devolveu o prompt. Tente de novo.',
 
   'canvas.analysis.progress':     'Analisando {done}/{total}',
   'canvas.analysis.remaining':    ' · restam ~{sec}s',

@@ -11,7 +11,7 @@ import VideoTrimModal from '../VideoTrimModal'
 import { recordDuration, getEstimateSeconds } from '../../lib/estimate'
 import { useT } from '../../i18n'
 import { mediaUrl } from '../../lib/mediaUrl'
-import { foiCancelado } from '../../lib/friendlyError'
+import { foiCancelado, friendlyError } from '../../lib/friendlyError'
 import type { I18nKey } from '../../../shared/i18n'
 
 // ─── busca: normalização + sinônimos/hiperônimos bilíngues (PT↔EN) ───────────
@@ -3562,6 +3562,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   // Vira um storyboard [img0]—[card 0→1]—[img1]—[card 1→2]—[img2]… com um prompt
   // de movimento por par consecutivo. Todos ligados: arrastar um move a cadeia toda.
   const [animatePrompting, setAnimatePrompting] = useState(false)
+  const [animError, setAnimError] = useState<string | null>(null)
   const handleAnimatePrompt = useCallback(async () => {
     // Ordena as imagens selecionadas da esquerda pra direita (ordem de leitura do storyboard).
     const imgs = [...selIdsRef.current]
@@ -3569,6 +3570,7 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       .filter((n): n is PixiNode => !!n && n.type === 'imageNode' && !!n.data.imagePath)
       .sort((p, q) => (p.x - q.x) || (p.y - q.y))
     if (imgs.length < 2) return
+    setAnimError(null)
     setAnimatePrompting(true)
     try {
       // Um prompt de movimento por par consecutivo (sequencial — a IA local só roda um por vez).
@@ -3577,7 +3579,9 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
         const p = await window.api.animatePrompt(imgs[i].data.imagePath, imgs[i + 1].data.imagePath)
         prompts.push(p || '')
       }
-      if (prompts.every(p => !p)) return
+      // Resposta vazia em qualquer par: avisa em vez de sumir calado (antes o
+      // botão só parava de girar e nenhum card aparecia).
+      if (prompts.some(p => !p)) { setAnimError(t('canvas.anim.empty')); return }
 
       const GAP = 40, PW = 260, CARD_H = 220
       const cardIds = prompts.map(() => uuid())
@@ -3673,6 +3677,10 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
       flashSave()
     } catch (err) {
       console.error('[animate] falhou:', err)
+      if (!foiCancelado(err)) {
+        const f = friendlyError(err, t('canvas.anim.failed'))
+        setAnimError(f.action ? `${f.message} ${f.action}` : f.message)
+      }
     } finally {
       setAnimatePrompting(false)
     }
@@ -3717,8 +3725,10 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
   const primaryType = primaryId ? nodesRef.current.get(primaryId)?.type : null
   const showTags = primaryId && selectedNodeData && primaryType === 'imageNode' && selCount === 1
   // 2+ imagens selecionadas → habilita o "Prompt de animação" (cadeia first/last frame).
+  // Conta só as imagens: a seleção com Ctrl+arrastar também pega o grupo em volta
+  // delas (e cards de prompt antigos), e exigir "só imagens" escondia o botão.
   const selectedImageCount = [...selIdsRef.current].map(id => nodesRef.current.get(id)).filter(n => n?.type === 'imageNode').length
-  const animImagesSelected = selectedImageCount >= 2 && selectedImageCount === selCount
+  const animImagesSelected = selectedImageCount >= 2
 
   return (
     <div
@@ -4343,6 +4353,15 @@ export default function PixiCanvas({ canvasId }: { canvasId: string }) {
           <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-[12px] text-red-300/90" style={{ background: 'rgba(40,10,12,0.95)', border: '1px solid rgba(248,113,113,0.25)' }}>
             <span>{videoError}</span>
             <button onClick={() => setVideoError(null)} className="text-red-300/50 hover:text-red-300">✕</button>
+          </div>
+        </div>
+      )}
+
+      {animError && !animatePrompting && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 pointer-events-auto">
+          <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-[12px] text-red-300/90" style={{ background: 'rgba(40,10,12,0.95)', border: '1px solid rgba(248,113,113,0.25)' }}>
+            <span>{animError}</span>
+            <button onClick={() => setAnimError(null)} className="text-red-300/50 hover:text-red-300">✕</button>
           </div>
         </div>
       )}

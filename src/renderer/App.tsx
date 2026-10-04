@@ -3,6 +3,7 @@ import { AnimatePresence } from 'framer-motion'
 import { type Session } from '@supabase/supabase-js'
 import logoUrl from './assets/logo.png'
 import TopBar from './components/TopBar'
+import { nomeProvedor } from './lib/provedores'
 import PixiCanvas from './components/PixiCanvas'
 import PromptBuilder from './components/PromptBuilder'
 import Settings from './components/Settings'
@@ -199,15 +200,18 @@ export default function App() {
     })
   }, [])
 
-  const resolveProviderName = async () => {
+  // Lê a conexão ativa (aiProvider) e se ela tem chave salva. 'local' nunca tem.
+  const refreshConnection = async () => {
     const provider = (await window.api.getSetting('aiProvider') as string | null) ?? 'anthropic'
-    const names: Record<string, string> = { anthropic: 'Claude', openai: 'ChatGPT', togetherai: 'Together AI' }
-    return names[provider] ?? provider
+    const key = provider === 'local' ? null : await window.api.getApiKey(provider)
+    setHasApiKey(!!key)
+    setApiProviderName(key ? nomeProvedor(provider) : '')
+    return !!key
   }
 
+  // Chave salva nas Settings OU troca de conexão pelo menu da barra.
   const handleKeySaved = async () => {
-    setHasApiKey(true)
-    setApiProviderName(await resolveProviderName())
+    await refreshConnection()
     window.dispatchEvent(new CustomEvent('apikey-changed'))
     // Antes só marcava isPending na store — e ninguém escuta isso: as imagens
     // ficavam girando para sempre. O evento é o mesmo do botão "tentar de novo".
@@ -217,14 +221,6 @@ export default function App() {
         window.dispatchEvent(new CustomEvent('retry-analysis', { detail: { nodeId: node.id, imagePath: node.data.imagePath } }))
       }
     }
-  }
-
-  const handleRemoveApiKey = async () => {
-    const provider = (await window.api.getSetting('aiProvider') as string | null) ?? 'anthropic'
-    await window.api.setApiKey(provider as 'anthropic' | 'openai', '')
-    setHasApiKey(false)
-    setApiProviderName('')
-    window.dispatchEvent(new CustomEvent('apikey-changed'))
   }
 
   const handleSignOut = async () => {
@@ -261,14 +257,7 @@ export default function App() {
         setShowOnboarding(true)
       }
 
-      // Check API key
-      const provider = (await window.api.getSetting('aiProvider') as string | null) ?? 'anthropic'
-      const key = await window.api.getApiKey(provider as 'anthropic' | 'openai')
-      setHasApiKey(!!key)
-      if (key) {
-        const names: Record<string, string> = { anthropic: 'Claude', openai: 'ChatGPT', togetherai: 'Together AI' }
-        setApiProviderName(names[provider] ?? provider)
-      }
+      const key = await refreshConnection()
 
       // Load canvas list
       const canvases = await window.api.listCanvases() as { id: string; name: string; updated_at: number }[]
@@ -461,8 +450,10 @@ export default function App() {
         hasApiKey={hasApiKey}
         apiProviderName={apiProviderName}
         localActive={!hasApiKey && localOk}
+        localAvailable={localOk}
         localModel={localModel}
-        onRemoveApiKey={handleRemoveApiKey}
+        onConnectionChanged={handleKeySaved}
+        onUninstallLocal={startLocalUninstall}
         onSignOut={handleSignOut}
       />
 
