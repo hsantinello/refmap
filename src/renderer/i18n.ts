@@ -19,15 +19,20 @@ import { useCanvasStore } from './store'
 
 export type { I18nKey }
 
+// No Mac os atalhos usam ⌘ (o código já aceita metaKey junto do ctrlKey), mas os
+// textos dizem "Ctrl". Trocamos na exibição em vez de duplicar chaves por SO.
+const IS_MAC = typeof window !== 'undefined' && window.api?.platform === 'darwin'
+const paraSO = (texto: string) => (IS_MAC ? texto.replace(/Ctrl/g, '⌘') : texto)
+
 /** Tradução imperativa — lê o idioma atual do store no momento da chamada. */
 export function t(key: I18nKey, vars?: Vars): string {
-  return translate(useCanvasStore.getState().appLang, key, vars)
+  return paraSO(translate(useCanvasStore.getState().appLang, key, vars))
 }
 
 /** Tradução reativa — o componente re-renderiza ao trocar o idioma. */
 export function useT() {
   const lang = useCanvasStore(s => s.appLang)
-  return useCallback((key: I18nKey, vars?: Vars) => translate(lang, key, vars), [lang])
+  return useCallback((key: I18nKey, vars?: Vars) => paraSO(translate(lang, key, vars)), [lang])
 }
 
 /** Fraseado com pedaços de JSX no meio ("instala <b>três modelos</b> que rodam…").
@@ -39,7 +44,7 @@ export function useT() {
 export function useTRich() {
   const lang = useCanvasStore(s => s.appLang)
   return useCallback((key: I18nKey, nodes: Record<string, ReactNode>): ReactNode[] => {
-    return translate(lang, key)
+    return paraSO(translate(lang, key))
       .split(/(\{\w+\})/g)
       .filter(part => part !== '')
       .map((part, i) => {

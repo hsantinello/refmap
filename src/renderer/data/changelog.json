@@ -1,5 +1,23 @@
 [
   {
+    "version": "0.0.35",
+    "date": "2026-10-15",
+    "items": [
+      "Mac: a versão para Mac com processador Intel voltou a funcionar — na 0.0.34 ela não abria.",
+      "Mac: a IA local agora é instalada e desinstalada automaticamente, como no Windows.",
+      "Mac: o ditado de prompts pelo microfone passou a funcionar.",
+      "Mac: os atalhos aparecem com ⌘ em vez de Ctrl, e o instalador mostra como liberar o app na primeira abertura.",
+      "Mac: quando sair uma versão nova, o botão Baixar abre a página de download."
+    ],
+    "items_en": [
+      "Mac: the version for Intel Macs works again — in 0.0.34 it would not open.",
+      "Mac: the local AI is now installed and uninstalled automatically, like on Windows.",
+      "Mac: dictating prompts with the microphone now works.",
+      "Mac: shortcuts show ⌘ instead of Ctrl, and the installer shows how to allow the app on first launch.",
+      "Mac: when a new version comes out, the Download button opens the download page."
+    ]
+  },
+  {
     "version": "0.0.34",
     "date": "2026-10-03",
     "items": [

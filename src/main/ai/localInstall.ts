@@ -3,12 +3,15 @@ import { spawn } from 'child_process'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { getLocalConfig, getLocalTextConfig } from './local'
 import { tm } from '../i18n'
 
-// Instalação 100% in-app da IA local (Ollama + modelo), só Windows por enquanto.
-// Fluxo: verifica → (baixa+instala Ollama silencioso, se preciso) → inicia → puxa o modelo.
+// Instalação 100% in-app da IA local (Ollama + modelo), no Windows e no macOS.
+// Fluxo: verifica → (baixa+instala Ollama, se preciso) → inicia → puxa o modelo.
+// Windows: instalador Inno silencioso. macOS: zip oficial com o Ollama.app,
+// extraído em /Applications (ou ~/Applications sem permissão) e aberto com `open`.
 // Cada etapa emite progresso pro renderer via 'local:installProgress'.
 
 export type InstallPhase =
@@ -22,6 +25,66 @@ export interface InstallProgress {
 }
 
 const OLLAMA_INSTALLER_URL = 'https://ollama.com/download/OllamaSetup.exe'
+const OLLAMA_MAC_ZIP_URL   = 'https://ollama.com/download/Ollama-darwin.zip'
+const IS_MAC = process.platform === 'darwin'
+
+// Onde o Ollama.app pode estar no Mac (instalado por nós ou pela própria pessoa).
+function macAppDirs(): string[] {
+  return ['/Applications', path.join(os.homedir(), 'Applications')]
+}
+function existingOllamaMacApp(): string | null {
+  for (const d of macAppDirs()) {
+    const p = path.join(d, 'Ollama.app')
+    if (fs.existsSync(p)) return p
+  }
+  return null
+}
+
+// Roda um comando e resolve com o código de saída (macOS: open, ditto, pkill).
+function run(cmd: string, args: string[]): Promise<number> {
+  return new Promise(resolve => {
+    const proc = spawn(cmd, args, { stdio: 'ignore' })
+    proc.on('error', () => resolve(-1))
+    proc.on('exit', code => resolve(code ?? -1))
+  })
+}
+
+// Abre o Ollama.app — ele sobe o servidor sozinho e fica na barra de menus.
+async function startMacOllama(appPath: string): Promise<void> {
+  await run('open', ['-g', '-a', appPath])   // -g: sem roubar o foco do Ref Map
+}
+
+// Baixa o zip oficial e põe o Ollama.app em /Applications (ou ~/Applications).
+// `ditto` preserva a assinatura da Ollama; um download feito por nós não recebe
+// a marca de quarentena, então o macOS abre o app sem o aviso de "baixado da internet".
+async function installMacOllama(win: BrowserWindow): Promise<string> {
+  const dir = path.join(app.getPath('temp'), 'refmap-ollama')
+  fs.rmSync(dir, { recursive: true, force: true })
+  fs.mkdirSync(dir, { recursive: true })
+  const zipPath = path.join(dir, 'Ollama-darwin.zip')
+
+  send(win, { phase: 'downloading', percent: 0, message: tm('main.install.downloading') })
+  await downloadFile(OLLAMA_MAC_ZIP_URL, zipPath, pct =>
+    send(win, { phase: 'downloading', percent: pct, message: tm('main.install.downloading') }))
+
+  send(win, { phase: 'installing', percent: -1, message: tm('main.install.installing') })
+  const extraido = path.join(dir, 'x')
+  if (await run('ditto', ['-x', '-k', zipPath, extraido]) !== 0) throw new Error('Could not extract Ollama.')
+  const origem = path.join(extraido, 'Ollama.app')
+  if (!fs.existsSync(origem)) throw new Error('Ollama.app not found in the download.')
+
+  for (const destDir of macAppDirs()) {
+    try {
+      fs.mkdirSync(destDir, { recursive: true })
+      const dest = path.join(destDir, 'Ollama.app')
+      if (await run('ditto', [origem, dest]) === 0 && fs.existsSync(dest)) {
+        fs.rm(dir, { recursive: true, force: true }, () => {})
+        return dest
+      }
+    } catch { /* sem permissão nessa pasta: tenta a próxima */ }
+  }
+  throw new Error('Could not copy Ollama.app to Applications.')
+}
 
 function send(win: BrowserWindow, p: InstallProgress): void {
   if (!win.isDestroyed()) win.webContents.send('local:installProgress', p)
@@ -192,13 +255,29 @@ async function waitUntilGone(filePath: string, timeoutMs: number): Promise<boole
   return false
 }
 
-// Desinstala o Ollama (Windows). Emite progresso pelo MESMO canal da instalação
+// Desinstala o Ollama (Windows e macOS). Emite progresso pelo MESMO canal da instalação
 // ('local:installProgress'), então aparece no pill do topo e na barra do Settings.
 export async function uninstallLocal(win: BrowserWindow): Promise<void> {
   if (installing) return
   installing = true
   try {
-    if (process.platform !== 'win32') throw new Error('Automatic uninstall is only on Windows.')
+    if (IS_MAC) {
+      // Mesmo comportamento do Windows: remove o programa; os modelos baixados
+      // (~/.ollama) ficam, como faz o desinstalador oficial.
+      const appPath = existingOllamaMacApp()
+      if (!appPath) throw new Error('Ollama.app not found.')
+      send(win, { phase: 'uninstalling', percent: -1, message: tm('main.install.stopping') })
+      await run('osascript', ['-e', 'quit app "Ollama"'])
+      await run('pkill', ['-f', 'Ollama.app'])
+      await run('pkill', ['-x', 'ollama'])
+      await new Promise(r => setTimeout(r, 1500))
+      send(win, { phase: 'uninstalling', percent: -1, message: tm('main.install.removing') })
+      fs.rmSync(appPath, { recursive: true, force: true })
+      if (fs.existsSync(appPath)) throw new Error('Uninstall did not complete; Ollama is still installed.')
+      send(win, { phase: 'done', percent: 100, message: tm('main.install.uninstalled') })
+      return
+    }
+    if (process.platform !== 'win32') throw new Error('Automatic uninstall is only on Windows and macOS.')
     const local = process.env.LOCALAPPDATA
     const ollamaExe = local ? path.join(local, 'Programs', 'Ollama', 'ollama.exe') : ''
 
@@ -250,7 +329,14 @@ export async function installLocalAI(win: BrowserWindow): Promise<void> {
     let up = await isOllamaUp(root)
 
     // Instalado mas parado? Tenta iniciar antes de baixar de novo.
-    if (!up) {
+    if (!up && IS_MAC) {
+      const appPath = existingOllamaMacApp()
+      if (appPath) {
+        send(win, { phase: 'starting', percent: -1, message: tm('main.install.starting') })
+        await startMacOllama(appPath)
+        up = await waitForOllama(root, 30_000)
+      }
+    } else if (!up) {
       const exe = existingOllamaExe()
       if (exe) {
         send(win, { phase: 'starting', percent: -1, message: tm('main.install.starting') })
@@ -263,10 +349,19 @@ export async function installLocalAI(win: BrowserWindow): Promise<void> {
       }
     }
 
+    // Não instalado → baixa e instala (macOS).
+    if (!up && IS_MAC) {
+      const appPath = await installMacOllama(win)
+      send(win, { phase: 'starting', percent: -1, message: tm('main.install.starting') })
+      await startMacOllama(appPath)
+      up = await waitForOllama(root, 60_000)
+      if (!up) throw new Error('Ollama installed but the service did not respond.')
+    }
+
     // Não instalado → baixa e instala (Windows).
     if (!up) {
       if (process.platform !== 'win32') {
-        throw new Error('Automatic installation is only on Windows for now.')
+        throw new Error('Automatic installation is only on Windows and macOS.')
       }
       const dir = path.join(app.getPath('temp'), 'refmap-ollama')
       fs.mkdirSync(dir, { recursive: true })

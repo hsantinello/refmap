@@ -56,11 +56,24 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-mac:
-    name: Build macOS (x64 + arm64)
-    runs-on: macos-latest
+    # UMA MÁQUINA POR ARQUITETURA. Antes os dois DMGs saíam da mesma máquina
+    # arm64, e o npm instala os binários nativos (better-sqlite3, sharp, ffmpeg)
+    # só para a arquitetura de quem roda: o DMG Intel da v0.0.34 levou tudo em
+    # arm64 e nem abria. O scripts/after-pack.cjs confere a arquitetura de cada
+    # binário e derruba o build antes de publicar se algo vier errado.
+    name: Build macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     needs: release
     # Permite reprocessar só o Mac sem republicar um Windows que já está no ar.
     if: ${{ inputs.platform == 'all' || inputs.platform == 'mac' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-latest
+          - arch: x64
+            runner: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 
@@ -82,7 +95,9 @@ jobs:
         # better-sqlite3 + ffmpeg-static isso passa do limite de 64 KB
         # ("pattern is too long"), quebrando o build do Mac desde a v0.0.18.
         # Dois DMGs separados evitam esse passo por completo.
-        run: npx electron-vite build && npx electron-builder --mac --publish always
+        # CSC_IDENTITY_AUTO_DISCOVERY false: sem certificado da Apple; a
+        # assinatura ad-hoc é feita no after-pack.
+        run: npx electron-vite build && npx electron-builder --mac --${{ matrix.arch }} --publish always
 
   build-win:
     name: Build Windows (x64)

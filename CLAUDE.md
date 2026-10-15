@@ -391,6 +391,36 @@ Todo canal IPC deve ler `win` da variável de módulo, nunca capturar a janela.
 - Para ajustar a VRAM de um template: entrada em `CURADAS` com o nome exato do
   índice (o teste unitário confere que todas existem).
 
+## macOS (sem certificado da Apple)
+
+Decisão de produto: SEM Apple Developer Program (US$ 99/ano, e não há Mac para
+gerar o certificado). Consequências e o que foi feito:
+- **Assinatura ad-hoc** em `scripts/after-pack.cjs` (`codesign --sign -`). Sem
+  ela o macOS em chip Apple diz "danificado" — sem botão para liberar. Com ela,
+  a pessoa libera em Ajustes do Sistema → Privacidade e Segurança → "Abrir Mesmo
+  Assim". O passo a passo está no fundo do DMG (`build/dmg-background.png`,
+  gerado por `scripts/make-dmg-background.py`) e no rodapé da release
+  (`scripts/release-notes.mjs`).
+- **Uma máquina por arquitetura** no `publish.yml` (matrix arm64 =
+  `macos-latest`, x64 = `macos-15-intel`). O npm instala better-sqlite3, sharp e
+  ffmpeg só para a arquitetura de quem roda: a v0.0.34 Intel saiu com tudo arm64
+  e não abria. O `after-pack.cjs` confere cada binário com `lipo` e DERRUBA o
+  build antes de publicar se algo vier errado.
+- **Atualização automática não funciona no Mac** (Squirrel.Mac exige app
+  assinado): no Mac o botão "Baixar" do sininho abre a página da release
+  (`updater:download` devolve `'external'`). Nomes fixos dos DMGs:
+  `Ref-Map-Mac-arm64.dmg` / `Ref-Map-Mac-x64.dmg` — o link
+  `releases/latest/download/<nome>` sempre aponta para a versão mais nova.
+- `NSMicrophoneUsageDescription` em `build.mac.extendInfo`: sem ele o ditado
+  não tem permissão de microfone no Mac.
+- IA local no Mac: `localInstall.ts` baixa `Ollama-darwin.zip`, extrai com
+  `ditto` para /Applications (ou ~/Applications) e abre com `open -g -a`.
+  Desinstalar remove o Ollama.app e mantém ~/.ollama (igual ao Windows).
+- Textos com "Ctrl" viram "⌘" na exibição (`renderer/i18n.ts`, `paraSO`); todo
+  atalho novo deve aceitar `e.ctrlKey || e.metaKey`.
+- A config de build que vale é a do `package.json` (`build`); o
+  `electron-builder.config.ts` não é usado.
+
 ## Princípios de Desenvolvimento
 
 - **100% local** — nenhum dado enviado a servidores próprios

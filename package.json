@@ -1,6 +1,6 @@
 {
   "name": "refmap",
-  "version": "0.0.34",
+  "version": "0.0.35",
   "description": "Canvas flutuante de referências para criadores de IA",
   "main": "out/main/index.js",
   "author": "Ref Map",
@@ -84,14 +84,24 @@
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist"
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "O Ref Map usa o microfone para ditar prompts por voz. / Ref Map uses the microphone to dictate prompts by voice."
+      }
     },
+    "afterPack": "scripts/after-pack.cjs",
     "dmg": {
       "title": "Ref Map ${arch}",
+      "artifactName": "Ref-Map-Mac-${arch}.${ext}",
+      "background": "build/dmg-background.png",
       "window": {
-        "width": 540,
-        "height": 380
-      }
+        "width": 600,
+        "height": 440
+      },
+      "contents": [
+        { "x": 150, "y": 150 },
+        { "x": 450, "y": 150, "type": "link", "path": "/Applications" }
+      ]
     },
     "nsis": {
       "oneClick": false,

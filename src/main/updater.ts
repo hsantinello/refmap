@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog } from 'electron'
+import { app, BrowserWindow, dialog, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { tm } from './i18n'
 import { handleSeguro } from './security'
 
 let win: BrowserWindow | null = null
+const RELEASES_URL = 'https://github.com/hsantinello/refmap/releases/latest'
 let updateReady = false   // true quando uma atualização já foi BAIXADA e está pronta
 let closeDecided = false  // evita reabrir o diálogo na segunda passada do 'close'
 
@@ -58,9 +59,16 @@ export function initUpdater(mainWindow: BrowserWindow): void {
     app.isPackaged ? autoUpdater.checkForUpdates().catch(() => null) : null
   )
 
-  handleSeguro('updater:download', () =>
-    app.isPackaged ? autoUpdater.downloadUpdate().catch(() => null) : null
-  )
+  // macOS: o app não tem assinatura da Apple, e o Squirrel.Mac recusa instalar
+  // atualização de app sem assinatura. Em vez de uma barra que nunca termina,
+  // abrimos a página da versão nova para a pessoa baixar o .dmg.
+  handleSeguro('updater:download', () => {
+    if (process.platform === 'darwin') {
+      void shell.openExternal(RELEASES_URL)
+      return 'external'
+    }
+    return app.isPackaged ? autoUpdater.downloadUpdate().catch(() => null) : null
+  })
 
   handleSeguro('updater:install', () => {
     if (app.isPackaged) setImmediate(() => autoUpdater.quitAndInstall(false, true))

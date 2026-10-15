@@ -26,6 +26,8 @@ const api = {
   // Files
   openFilePicker: (): Promise<string[]> => ipcRenderer.invoke('image:openFilePicker'),
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+  // 'darwin' | 'win32' | … — a interface muda um ou outro fluxo no Mac.
+  platform: process.platform,
 
   // Vídeo → cenas
   openVideoPicker: (): Promise<string | null> => ipcRenderer.invoke('video:openFilePicker'),

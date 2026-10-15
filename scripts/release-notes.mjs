@@ -26,3 +26,13 @@ if (!entrada) {
 }
 
 console.log(entrada.items.map(i => `- ${i}`).join('\n'))
+
+// Bloco fixo para quem usa Mac: qual arquivo baixar e como liberar na primeira
+// abertura (o app não tem assinatura da Apple). Os nomes dos .dmg são fixos
+// (package.json → build.dmg.artifactName).
+console.log([
+  '',
+  '---',
+  '**Mac:** baixe `Ref-Map-Mac-arm64.dmg` (chip Apple: M1, M2, M3, M4…) ou `Ref-Map-Mac-x64.dmg` (Intel). Para saber qual é o seu: menu Apple → Sobre Este Mac → "Chip" (Apple) ou "Processador" (Intel).',
+  'Na primeira abertura o Mac pode bloquear: abra o Ref Map, feche o aviso, vá em **Ajustes do Sistema → Privacidade e Segurança**, role até o fim e clique em **Abrir Mesmo Assim**.',
+].join('\n'))

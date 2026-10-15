@@ -167,7 +167,12 @@ export default function UpdateBell() {
 
               {update.status === 'available' && (
                 <button
-                  onClick={() => { setUpdate({ status: 'downloading', percent: 0 }); window.api.downloadUpdate() }}
+                  onClick={async () => {
+                    // No Mac o main abre a página de download ('external'): não há barra de progresso.
+                    if (window.api.platform === 'darwin') { await window.api.downloadUpdate(); return }
+                    setUpdate({ status: 'downloading', percent: 0 })
+                    window.api.downloadUpdate()
+                  }}
                   className="shrink-0 px-2 py-0.5 rounded text-[11px] font-medium"
                   style={{ color: 'rgba(251,146,60,0.95)', background: 'rgba(251,146,60,0.15)', border: '1px solid rgba(251,146,60,0.35)' }}
                 >
