@@ -20,6 +20,27 @@ const path = require('path')
 const ARCH = { 1: 'x64', 3: 'arm64' }
 const LIPO = { x64: 'x86_64', arm64: 'arm64' }
 
+// Só Mach-O interessa: pacotes como o onnxruntime-node trazem binários de Linux
+// e Windows junto, e o `lipo` falha neles (foi o que derrubou o 1º build da 0.0.35).
+function ehMachO(p) {
+  const fd = fs.openSync(p, 'r')
+  const b = Buffer.alloc(4)
+  fs.readSync(fd, b, 0, 4, 0)
+  fs.closeSync(fd)
+  const m = b.toString('hex')
+  return m === 'cffaedfe' || m === 'cefaedfe' || m === 'cafebabe'
+}
+
+// Binários que o app USA de fato: têm de estar na arquitetura do build. Os demais
+// (ex.: onnxruntime-node traz darwin/arm64 e darwin/x64 juntos e nem é usado)
+// só são assinados.
+const ESSENCIAIS = [
+  /better-sqlite3[\\/]build[\\/]Release[\\/]better_sqlite3\.node$/,
+  /ffmpeg-static[\\/]ffmpeg$/,
+  /@img[\\/]sharp-darwin-[^\\/]+[\\/]lib[\\/][^\\/]+\.node$/,
+  /@img[\\/]sharp-libvips-darwin-[^\\/]+[\\/]lib[\\/][^\\/]+\.dylib$/,
+]
+
 function binariosNativos(dir) {
   const achados = []
   const andar = d => {
@@ -28,7 +49,7 @@ function binariosNativos(dir) {
       const st = fs.lstatSync(p)
       if (st.isSymbolicLink()) continue
       if (st.isDirectory()) andar(p)
-      else if (/\.(node|dylib)$/.test(nome) || (nome === 'ffmpeg' && p.includes('ffmpeg-static'))) achados.push(p)
+      else if ((/\.(node|dylib)$/.test(nome) || (nome === 'ffmpeg' && p.includes('ffmpeg-static'))) && ehMachO(p)) achados.push(p)
     }
   }
   if (fs.existsSync(dir)) andar(dir)
@@ -49,12 +70,11 @@ exports.default = async function afterPack(context) {
     const archs = execFileSync('lipo', ['-archs', b]).toString().trim().split(/\s+/)
     const rel = path.relative(unpacked, b)
     console.log(`[after-pack] ${archs.join(',').padEnd(14)} ${rel}`)
-    if (!archs.includes(esperado)) errados.push(`${rel} (${archs.join(',')})`)
+    if (ESSENCIAIS.some(re => re.test(b)) && !archs.includes(esperado)) errados.push(`${rel} (${archs.join(',')})`)
   }
-  for (const essencial of ['better_sqlite3.node', 'ffmpeg']) {
-    if (!binarios.some(b => path.basename(b) === essencial)) errados.push(`${essencial} não encontrado`)
+  for (const re of ESSENCIAIS) {
+    if (!binarios.some(b => re.test(b))) errados.push(`não encontrado: ${re}`)
   }
-  if (!binarios.some(b => /sharp-darwin-.*\.node$/.test(b))) errados.push('sharp (.node) não encontrado')
   if (errados.length) {
     throw new Error(`[after-pack] binários fora de ${esperado} no build ${arch}:\n  ${errados.join('\n  ')}`)
   }
