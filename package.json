@@ -67,6 +67,7 @@
         "dmg",
         "zip"
       ],
+      "artifactName": "Ref-Map-${version}-${arch}-mac.${ext}",
       "icon": "build/icon.png",
       "category": "public.app-category.graphics-design",
       "hardenedRuntime": true,
