@@ -406,6 +406,9 @@ gerar o certificado). Consequências e o que foi feito:
   ffmpeg só para a arquitetura de quem roda: a v0.0.34 Intel saiu com tudo arm64
   e não abria. O `after-pack.cjs` confere cada binário com `lipo` e DERRUBA o
   build antes de publicar se algo vier errado.
+  Os targets do Mac no `package.json` NÃO listam `arch`: com a lista, cada
+  máquina compilava as DUAS arquiteturas apesar do `--arm64`/`--x64` do comando
+  (2º build da 0.0.35), e a versão "da outra" saía com binários errados.
 - **Atualização automática não funciona no Mac** (Squirrel.Mac exige app
   assinado): no Mac o botão "Baixar" do sininho abre a página da release
   (`updater:download` devolve `'external'`). Nomes fixos dos DMGs:
