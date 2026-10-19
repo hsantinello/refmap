@@ -1,5 +1,17 @@
 [
   {
+    "version": "0.0.36",
+    "date": "2026-10-19",
+    "items": [
+      "Otimizador de prompts: o Flux 2 [klein] deu lugar ao Flux 3, seguindo o guia oficial de prompts do FLUX 3 Image — assunto primeiro, textos na imagem entre aspas com posição e estilo das letras, e edições com o que muda e o que deve ficar igual.",
+      "Cores em código hex (como #1E3A5F) agora são mantidas no prompt otimizado."
+    ],
+    "items_en": [
+      "Prompt optimizer: Flux 2 [klein] was replaced by Flux 3, following the official FLUX 3 Image prompt guide — subject first, in-image text in quotes with position and lettering style, and edits that state what changes and what stays the same.",
+      "Hex color codes (like #1E3A5F) are now kept in the optimized prompt."
+    ]
+  },
+  {
     "version": "0.0.35",
     "date": "2026-10-15",
     "items": [
