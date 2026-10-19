@@ -314,7 +314,7 @@ export function registerHandlers(janela: BrowserWindow): void {
     const cleanPrompt = (text: string): string =>
       text
         .replace(/^#{1,6}\s+/gm, '')       // ## headers at line start
-        .replace(/#/g, '')                 // any remaining # chars
+        .replace(/#(?![0-9a-fA-F]{3,8}\b)/g, '') // any remaining # chars (keeps hex colors: #1E3A5F)
         .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')  // **bold**, *italic*, ***both***
         .replace(/_{1,2}([^_]+)_{1,2}/g, '$1')    // __bold__, _italic_
         .replace(/`([^`]+)`/g, '$1')        // `code`

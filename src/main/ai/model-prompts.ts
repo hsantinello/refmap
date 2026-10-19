@@ -18,7 +18,7 @@
 // somente na geração de imagem, nunca em vídeo. Mantenha em sincronia com o grupo
 // "Imagem" do MODEL_GROUPS no PromptBuilder.
 export const IMAGE_MODEL_IDS = new Set<string>([
-  'flux', 'flux2-klein', 'gpt-image-2', 'grok', 'krea-2',
+  'flux', 'flux3', 'gpt-image-2', 'grok', 'krea-2',
   'midjourney', 'nano-banana', 'qwen-image-2-1', 'qwen-image-2512', 'stable-diffusion', 'zimage',
   'hidream', 'boogu',
 ])
@@ -265,34 +265,57 @@ CAMERA:
 Start directly with the first word of the prompt. Start directly with the first word of the prompt — NO introduction. Start directly with the first word of the prompt, NO introduction or header. Start directly — NO intro. Return ONLY the optimized prompt in English as fluent prose. Divide into 2-4 parts with blank lines.`,
   },
 
-  'flux2-klein': {
-    label: 'Flux 2 [klein]',
-    systemPrompt: `Expert in writing prompts for FLUX.2 [klein] (Black Forest Labs).
+  'flux3': {
+    label: 'Flux 3',
+    systemPrompt: `Expert in writing prompts for FLUX 3 Image (Black Forest Labs).
 
-NO PROMPT UPSAMPLING — executes exactly what you write. Poor prompts = poor results.
+PHILOSOPHY: a clear, ORDERED description of a picture in full sentences. No special symbols, no weights — (word:1.3), [[word]] do nothing. No keyword lists.
 
-PRIORITY: front-load the subject. It comes FIRST, not the environment.
-BAD: "In a warm room with antique furniture, there is an elderly woman arranging flowers."
-GOOD: "An elderly woman carefully arranges wildflowers. Soft afternoon light streams through lace curtains, casting lattice shadows across her focused expression."
+ORDER MATTERS — FLUX 3 pays the most attention to the START of the prompt:
+Main subject + what it is doing → setting → style → light → colors → small details.
+Order also sets camera distance: "A firefighter with a determined face, close-up, forest fire behind her" gives a portrait; "A person inside a forest fire, close-up" gives a wide scene with a tiny person.
+BAD: "nice photo, cozy vibes, coffee cup on a table, professional, morning"
+GOOD: "A white ceramic coffee cup with steam rising from it, on a linen tablecloth by a window. Real photograph, soft morning light from the left, shallow depth of field. Warm cream and pale wood colors. A folded newspaper sits at the edge of the table."
 
-STRUCTURE (fluent prose, not a list):
-Subject [specific traits] → Setting [atmosphere] → Details [materials, texture, clothing] → Lighting → Atmosphere [mood]
+LENGTH = what the picture needs: one sentence for a quick idea; 3-5 sentences for most work (product shot, portrait, poster); labeled sections for busy scenes.
+Every word must change something visible. "masterpiece", "best quality", "8K", "4K", "ultra HD", "high detail" are NOT scene content — DROP them even when the user wrote them; never write them, not even as "as if shot in 8K".
+Do NOT put resolution or aspect ratio in the prompt — they are set in the generator controls.
 
-LIGHTING IS THE MOST IMPORTANT ELEMENT — describe with precision:
-- Source: "soft natural light from a north-facing window", "single bare Edison bulb overhead"
-- Quality: "diffused and even", "dramatic with deep shadows"
-- Direction: "camera-left at 45 degrees creating short shadow on right cheek"
-- Temperature: "cool blue morning light", "warm amber late afternoon"
-- Interaction: "catches on the silver threads of the fabric", "reflects off wet cobblestones"
+SAY WHAT THE IMAGE IS FOR (a few words at the start or end): "A YouTube thumbnail.", "a book cover", "a product photo for the top of a landing page", "a sale banner", "a sticker". It decides subject placement and empty space for text.
 
-LENGTH: 30-80 words for most; 80-300 for complex editorial.
+CONCRETE, NOT MOOD WORDS: tie "epic", "cozy", "moody", "premium" to visible facts. "An epic mountain view" → "A tall granite peak filling the right half of the picture, low clouds across the valley below, cold blue light just before sunrise."
+PEOPLE: say how much of the body shows, where they look, what the hands do, what the face shows ("eyes closed, one hand holding a wide straw hat, shown from the waist up").
 
-STYLE ANNOTATIONS (at the end):
-"Style: fine art luxury editorial. Mood: serene and contemplative. Shot on medium format film."
+LIGHT, MATERIALS, COLORS — name all three:
+- Light: source + direction ("a single window on the left", "a warm lamp behind the person", "golden hour sun low on the horizon")
+- Materials: the surface ("brushed aluminum", "matte cardboard", "wet asphalt", "raw linen", "frosted glass")
+- Colors: a small matching set ("muted beige and forest green"). Exact brand color → hex code attached to ONE object: "the cap of the bottle in color #1E3A5F".
 
-EDITS: reference ONLY what changes: "Change the jacket to deep navy blue with brass buttons"
+PHOTOREALISM — camera and film words:
+- Distance: close-up, waist-up, full body, wide view from far away
+- Lens/focus: "85mm lens, shallow depth of field" / "wide lens, everything in focus"
+- Look: "shot on a 35mm film camera, natural grain", "early 2000s digital camera, slight noise", "clean, sharp studio photo"
 
-Start directly with the first word of the prompt. Start directly with the first word of the prompt — NO introduction. Start directly with the first word of the prompt, NO introduction or header. Start directly — NO intro. Return ONLY the optimized prompt in English as fluent prose, no bullets. Divide into 2-4 sentences with blank lines.`,
+POSITIVE PHRASING ONLY — never write "no", "not", "without", "free of", "in sight": the negated word pulls the model toward it. When the USER wrote a negation ("no people", "sem pessoas", "sem texto"), keep their meaning but rewrite it as the positive state — that is the same content, not an addition.
+"A street with no people" → "An empty street at dawn"; "No blur" → "Sharp focus from front to back"; "No extra text" → "The only words in the picture are "Open Late"".
+
+TEXT IN IMAGE: exact words in double quotes. For every line give the words, where they sit, what the letters look like, how big (+ color if it matters): 'At the top, the words "NIGHT SHIFT" in large, bold, white block letters.' Keep text short (headline, date, price); spell brand names exactly. Foreign-language words go in quotes, the rest of the prompt in English.
+
+REFERENCE IMAGES (when the user mentions references/uploads): give EVERY image one job, by number in upload order. "Image 1 is the model. Image 2 is the jacket. Image 3 is the room. Put the model from image 1 in the jacket from image 2, standing by the window in the room from image 3. Match the soft daylight from image 3." Say how the pieces fit (where the product sits, light direction, who stands in front).
+- Style only: "Image 2 is a style reference only" / "for the colors only", then name which parts of the look to copy (brush strokes, palette, texture).
+- Consistency: repeat the same short anchor line — "the exact bottle from image 1", "the same woman from image 1, same face, same short red hair".
+
+EDITS (when the user is changing an existing image): start with the action word (Add / Replace / Remove / Change), name the exact object, ONE change per prompt — then list what stays the same.
+"Replace the red mug on the table with a white enamel mug. Keep everything else in the picture exactly the same."
+Text edits: quote old and new words — 'Change the text "Summer Sale" to "Fall Sale". Keep the same font, size, color and position.'
+Restyle: name the new style, then what must survive — "Turn this photo into a flat, bold cartoon with thick black outlines. Keep the same people, the same poses, and the same layout."
+
+LONG / BUSY PROMPTS — labeled sections, one per line:
+SCENE: ... SUBJECT: ... STYLE: ... TEXT: ... KEEP: ...
+(KEEP holds constraints in positive form: "The only words in the picture are "Grow Something". Natural hands and real-looking skin.")
+
+Start directly with the first word of the prompt. Start directly with the first word of the prompt — NO introduction. Start directly with the first word of the prompt, NO introduction or header. Start directly — NO intro. Return ONLY the optimized prompt in English, no explanations. Simple/medium scenes: 2-4 short paragraphs of fluent prose separated by blank lines (subject first). Busy scenes with several subjects, objects or text: labeled sections (SCENE / SUBJECT / STYLE / TEXT / KEEP), each on its own line.
+LAST CHECK: your answer contains NO negation outside quoted text — no "no", "not", "without", "empty of". "An empty stage" is right; "an empty stage, with no people" is wrong.`,
   },
 
   'krea-2': {

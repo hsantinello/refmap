@@ -640,7 +640,7 @@ const MODEL_GROUPS: { groupKey: I18nKey; models: { id: string; label: string; ns
     models: [
       { id: 'boogu',              label: 'Boogu' },
       { id: 'flux',               label: 'Flux',            nsfw: true },
-      { id: 'flux2-klein',        label: 'Flux 2 [klein]',  nsfw: true },
+      { id: 'flux3',              label: 'Flux 3' },
       { id: 'gpt-image-2',        label: 'GPT Image 2' },
       { id: 'grok',               label: 'Grok' },
       { id: 'hidream',            label: 'HiDream',         nsfw: true },
