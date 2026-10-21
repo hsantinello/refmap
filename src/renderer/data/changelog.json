@@ -1,5 +1,19 @@
 [
   {
+    "version": "0.0.37",
+    "date": "2026-10-21",
+    "items": [
+      "Otimizador de prompts: novo perfil MOSS Image, seguindo o guia oficial do modelo — o prompt descreve a imagem pronta, o texto que aparece na imagem fica entre aspas no idioma original (com as quebras de linha), e listas de tags no estilo anime saem na ordem recomendada.",
+      "MOSS Image no modo JSON: monta o layout com título, assunto e textos nas posições certas para o formato pedido (2:3, 16:9, stories…).",
+      "MOSS Image: frases vagas como \"evocando a sensação de…\" são retiradas do prompt otimizado — o modelo desenha o que é visível, não sensações."
+    ],
+    "items_en": [
+      "Prompt optimizer: new MOSS Image profile, following the model's official guide — the prompt describes the finished image, in-image text stays in quotes in its original language (with its line breaks), and anime-style tag lists come out in the recommended order.",
+      "MOSS Image in JSON mode: builds the layout with title, subject and text in the right positions for the requested format (2:3, 16:9, stories…).",
+      "MOSS Image: vague phrases like \"evoking the feeling of…\" are removed from the optimized prompt — the model draws what is visible, not feelings."
+    ]
+  },
+  {
     "version": "0.0.36",
     "date": "2026-10-19",
     "items": [

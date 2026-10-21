@@ -12,6 +12,66 @@
   // Variante que devolve JSON estruturado em vez de prosa. Só os modelos que
   // aceitam JSON definem isto; a UI só oferece o botão quando existe.
   jsonSystemPrompt?: string
+  // Instrução extra montada A PARTIR do pedido do usuário, anexada ao
+  // jsonSystemPrompt. O MOSS usa para entregar só as caixas do formato pedido:
+  // com a tabela inteira, o modelo copiava a linha de outro formato.
+  jsonContext?: (prompt: string) => string
+  // Ajuste do JSON já validado, antes de ir para a tela (o MOSS troca nomes de
+  // zona pelas coordenadas exatas do formato pedido).
+  jsonPosProcessar?: (json: unknown, prompt: string) => unknown
+  // Limpeza do texto final (modo prosa), depois da limpeza padrão.
+  textoPosProcessar?: (texto: string) => string
+}
+
+// ── Frases abstratas ──────────────────────────────────────────────────────────
+// Modelos de texto menores (Llama 3.3 no Together, Dolphin local) insistem em
+// fechar a descrição com sentimento — "evoking the feeling of a lively jazz
+// performance", "The overall design is lively and inviting" — mesmo com a regra
+// no prompt. Para um modelo treinado com LEGENDAS (MOSS) isso é ruído: ele não
+// desenha "sensação". O filtro apaga essas orações e frases; o que for texto
+// entre aspas (vai ser escrito na imagem) nunca é tocado.
+const VERBO_ABSTRATO = '(?:evok\\w*|captur\\w*|convey\\w*|creat\\w*|giv\\w*|exud\\w*|radiat\\w*|suggest\\w*|reflect\\w*|add\\w*|lend\\w*|instill\\w*|invit\\w*)'
+const SUBSTANTIVO_ABSTRATO = '(?:feel\\w*|sense|essence|spirit|atmosphere|mood|vibe|energy|emotion\\w*|nostalgi\\w*|charm|ambi[ae]nce|warmth|excitement|sophistication|elegance|serenity|tranquility)'
+// A oração vai do verbo até a próxima vírgula/ponto — não come o detalhe visual
+// que vem depois ("…, evoking the feeling of jazz, with spotlights on the stage").
+const ORACAO_ABSTRATA = new RegExp(`,?\\s*\\b${VERBO_ABSTRATO}\\b[^.,;:\\u0000]*?\\b${SUBSTANTIVO_ABSTRATO}\\b[^.,;:\\u0000]*`, 'gi')
+const FRASE_GERAL = /^(?:overall,|the overall (?:design|mood|feel|feeling|atmosphere|vibe|effect|impression|tone|aesthetic|look|scene|image|composition) (?:is|feels|has|conveys|creates))/i
+const FINO_SEM_FATO = /\bsimple,? yet (?:sophisticated|elegant)\b/gi
+// "in a cozy and solitary atmosphere"
+const EM_UM_CLIMA = /,?\s*\bin an? [^.,;:\u0000]*?\b(?:atmosphere|mood|vibe|ambi[ae]nce)\b/gi
+// ", cozy and solitary atmosphere," — oração curta que TERMINA no substantivo vago
+// (não pega "mood lighting", que é luz de verdade)
+const CLIMA_SOLTO = /,\s*[^.,;:\u0000]{0,40}\b(?:atmosphere|vibe|ambi[ae]nce|mood)(?=\s*[,.]|\s*$)/gi
+// "a sense of stillness pervading the scene"
+const UMA_SENSACAO = /,?\s*\ban? (?:sense|feeling) of\b[^.,;:\u0000]*/gi
+// "the overall mood conveyed through the use of muted colors" → fica "muted colors"
+const CLIMA_VIA = /\bthe overall (?:mood|feel|feeling|atmosphere|vibe|tone) (?:is )?(?:conveyed|created|expressed|achieved|enhanced) (?:through|by|with) (?:the use of )?/gi
+
+export function semFrasesAbstratas(texto: string): string {
+  // Tira o texto citado do caminho (pode ocupar várias linhas) e devolve no fim.
+  const citacoes: string[] = []
+  const protegido = texto.replace(/"[^"]*"/g, m => `\u0000${citacoes.push(m) - 1}\u0000`)
+  const limpo = protegido
+    .split('\n')
+    .map(linha => linha
+      .split(/(?<=[.!?])\s+(?=[A-Z])/)
+      // Frase inteira de "clima geral" sai, a menos que traga texto citado.
+      .filter(f => f.includes('\u0000') || !FRASE_GERAL.test(f.trim()))
+      .map(f => f
+        .replace(CLIMA_VIA, '')
+        .replace(ORACAO_ABSTRATA, '')
+        .replace(EM_UM_CLIMA, '')
+        .replace(CLIMA_SOLTO, '')
+        .replace(UMA_SENSACAO, '')
+        .replace(FINO_SEM_FATO, 'clean'))
+      .join(' ')
+      .replace(/\s+,/g, ',')
+      .replace(/,\s*\./g, '.')
+      .replace(/ {2,}/g, ' ')
+      .trimEnd())
+    .join('\n')
+    .trim()
+  return limpo.replace(/\u0000(\d+)\u0000/g, (_, i) => citacoes[Number(i)])
 }
 
 // Modelos de imagem (vs. vídeo). Usado para aplicar a regra "default = fotorrealismo"
@@ -20,8 +80,86 @@
 export const IMAGE_MODEL_IDS = new Set<string>([
   'flux', 'flux3', 'gpt-image-2', 'grok', 'krea-2',
   'midjourney', 'nano-banana', 'qwen-image-2-1', 'qwen-image-2512', 'stable-diffusion', 'zimage',
-  'hidream', 'boogu',
+  'hidream', 'boogu', 'moss-image',
 ])
+
+// ── MOSS-Image: layout por ZONAS NOMEADAS ─────────────────────────────────────
+// O formato de layout do MOSS usa caixas em pixels, origem no CENTRO do canvas,
+// y para baixo, [y_min, x_min, y_max, x_max] ("abs_centralized" + "yxyx").
+// Modelos de linguagem erram essa conta: trocam a ordem, passam da borda, usam
+// a linha de outro formato. Então o modelo só ESCOLHE o nome da zona, e
+// mossAplicarZonas() converte o nome nas coordenadas exatas do formato pedido.
+const MOSS_CANVAS: Record<string, { w: number; h: number }> = {
+  '1:1': { w: 1024, h: 1024 }, '4:5': { w: 896, h: 1120 }, '3:4': { w: 896, h: 1184 },
+  '2:3': { w: 832, h: 1248 }, '9:16': { w: 768, h: 1344 }, '16:9': { w: 1344, h: 768 },
+  '3:2': { w: 1248, h: 832 }, '4:3': { w: 1184, h: 896 },
+}
+// Frações do canvas a partir do canto superior esquerdo: [y0, x0, y1, x1].
+const MOSS_ZONAS: Record<string, [number, number, number, number]> = {
+  'full':          [0.00, 0.00, 1.00, 1.00],
+  'top':           [0.05, 0.07, 0.20, 0.93],
+  'top-left':      [0.05, 0.07, 0.20, 0.49],
+  'top-right':     [0.05, 0.51, 0.20, 0.93],
+  'upper':         [0.20, 0.07, 0.40, 0.93],
+  'upper-left':    [0.20, 0.07, 0.40, 0.49],
+  'upper-right':   [0.20, 0.51, 0.40, 0.93],
+  'center':        [0.25, 0.22, 0.75, 0.78],
+  'center-tall':   [0.22, 0.33, 0.80, 0.67],
+  'center-wide':   [0.32, 0.08, 0.68, 0.92],
+  'left-column':   [0.22, 0.07, 0.80, 0.45],
+  'right-column':  [0.22, 0.55, 0.80, 0.93],
+  'lower':         [0.60, 0.07, 0.80, 0.93],
+  'lower-left':    [0.60, 0.07, 0.80, 0.49],
+  'lower-right':   [0.60, 0.51, 0.80, 0.93],
+  'bottom':        [0.84, 0.07, 0.95, 0.93],
+  'bottom-left':   [0.84, 0.07, 0.95, 0.49],
+  'bottom-right':  [0.84, 0.51, 0.95, 0.93],
+}
+// Palavras que a pessoa usa no lugar da proporção.
+const MOSS_FORMATO_POR_PALAVRA: [RegExp, string][] = [
+  [/\b(stories|story|reels?|tiktok|vertical cheio|9x16)\b/i, '9:16'],
+  [/\b(widescreen|youtube|thumbnail|paisagem|landscape|16x9)\b/i, '16:9'],
+  [/\b(feed|retrato|portrait|4x5)\b/i, '4:5'],
+  [/\b(capa de livro|book cover|cartaz|poster|pôster)\b/i, '2:3'],
+]
+function mossFormato(prompt: string): string {
+  const m = prompt.match(/\b(\d{1,2})\s*[:x×]\s*(\d{1,2})\b/)
+  const pedido = m ? `${m[1]}:${m[2]}` : ''
+  if (MOSS_CANVAS[pedido]) return pedido
+  return MOSS_FORMATO_POR_PALAVRA.find(([re]) => re.test(prompt))?.[1] ?? '1:1'
+}
+const mult16 = (v: number) => Math.round(v / 16) * 16
+
+export function mossCanvasContext(prompt: string): string {
+  const f = mossFormato(prompt)
+  const { w, h } = MOSS_CANVAS[f]
+  return `CANVAS FOR THIS REQUEST: ${f} (${w}x${h}${w > h ? ', landscape' : w < h ? ', portrait' : ', square'}). Valid "bbox" zone names: ${Object.keys(MOSS_ZONAS).join(', ')}.`
+}
+
+// Troca cada "bbox": "<zona>" pelas coordenadas do formato pedido e garante os
+// dois campos fixos do formato. Caixa que já veio em números é posta em ordem
+// (y antes de x, mínimo antes de máximo) e presa dentro do canvas.
+export function mossAplicarZonas(json: unknown, prompt: string): unknown {
+  if (!json || typeof json !== 'object') return json
+  const { w, h } = MOSS_CANVAS[mossFormato(prompt)]
+  const obj = json as { items?: { bbox?: unknown }[] } & Record<string, unknown>
+  for (const item of obj.items ?? []) {
+    const zona = typeof item.bbox === 'string' ? MOSS_ZONAS[item.bbox.trim().toLowerCase()] : undefined
+    if (zona) {
+      const [fy0, fx0, fy1, fx1] = zona
+      item.bbox = [mult16(fy0 * h - h / 2), mult16(fx0 * w - w / 2), mult16(fy1 * h - h / 2), mult16(fx1 * w - w / 2)]
+    } else if (Array.isArray(item.bbox) && item.bbox.length === 4 && item.bbox.every(n => typeof n === 'number')) {
+      const [a, b, c, d] = item.bbox as number[]
+      const prende = (v: number, lim: number) => Math.max(-lim / 2, Math.min(lim / 2, v))
+      item.bbox = [prende(Math.min(a, c), h), prende(Math.min(b, d), w), prende(Math.max(a, c), h), prende(Math.max(b, d), w)]
+    } else {
+      item.bbox = [...MOSS_ZONAS['center']].map((f, i) => mult16(f * (i % 2 ? w : h) - (i % 2 ? w : h) / 2))
+    }
+  }
+  obj.bbox_coord_space = 'abs_centralized'
+  obj.bbox_format = 'yxyx'
+  return obj
+}
 
 export const MODEL_PROMPT_CONFIGS: Record<string, ModelPromptConfig> = {
   'boogu': {
@@ -777,6 +915,97 @@ Consistency requirements: keep realistic contact shadows and product reflections
 Do not add or change: no text, logos, watermarks or extra products."
 
 Start directly with the first word of the prompt. Start directly with the first word of the prompt — NO introduction. Start directly with the first word of the prompt, NO introduction or header. Start directly — NO intro. Return ONLY the optimized prompt in English, in the shape of the task you identified (A, B or C). No explanations, no task label, and no quotation marks around the answer — the quotes around the examples above are not part of the output.`,
+  },
+
+  // MOSS-Image (OpenMOSS, 5B single-stream DiT): o guia oficial (USERGUIDE.md) +
+  // o system prompt que a Comfy escreveu para o enhancer do template oficial.
+  // Os dois concordam no essencial: o modelo aprendeu com LEGENDAS de imagens
+  // prontas, então o prompt descreve a imagem, não dá ordens.
+  'moss-image': {
+    label: 'MOSS Image',
+    outputLanguage: 'en-strict',
+    systemPrompt: `Expert in writing prompts for MOSS-Image (OpenMOSS — a 5B single-stream DiT with strong text rendering and automatic text layout). The model was trained on CAPTIONS THAT DESCRIBE FINISHED IMAGES, so the prompt must read like a description of the image itself — never like instructions to an artist ("create", "generate", "make sure", "please").
+
+CHOOSE THE FORMAT FROM THE USER'S INPUT:
+- DEFAULT — NATURAL-LANGUAGE CAPTION (almost every request): plain English prose, one to three paragraphs, usually 80 to 200 words, longer only when there is a lot of text to place.
+- TAG SEQUENCE — MANDATORY whenever the user's input is itself a comma-separated tag list: it starts with or contains a count tag (1girl, 1boy, 2girls, solo, multiple girls) or reads as short tags separated by commas (e.g. "1girl, hatsune miku, blue hair, smiling, stage lights"). A tag input gets a tag output, never prose — even when some tags are in Portuguese (translate those tags to English tags). Return a single comma-separated tag line in this exact order: Quality → Score → Meta → Year → Character → Series → Artist (as @name) → General. Example: "best quality, highres, hatsune miku, vocaloid, @foo bar, 1girl, blue hair, twintails, smiling, looking at viewer". Keep every tag the user gave; add only general visual tags that complete what they named.
+
+THE CAPTION, IN THIS ORDER:
+1. Open with the MEDIUM and the MAIN SUBJECT: "Editorial studio photograph of…", "Flat vector illustration of…", "Black-and-white grunge event poster:…".
+2. Then the setting and the composition — framing, viewpoint, where things sit. Give positions in words: left, right, top, bottom, center, foreground, background. Never coordinates.
+3. Then lighting, color palette, materials and textures, and finer details.
+
+KEEP THE REQUEST, FILL THE CRAFT:
+- Keep everything the user specified: subjects, counts, actions, relationships, medium, style, mood, colors and anything they excluded. Never contradict or drop it.
+- REQUIRED CAPTION CRAFT: a caption of a finished image always states its MEDIUM, FRAMING/VIEWPOINT, LIGHTING and COLOR PALETTE — the model learned from captions that always had them. When the user left them open, fill them with deliberate, concrete choices that serve the look they asked for. This craft decides HOW the thing the user named is rendered; it is never permission to add scene content. Never add a person, animal, object, place or action the user did not name; if they named only an object, no human appears.
+- Describe only what can be seen. No sounds, smells, backstory or intentions.
+- Do not invent real-world facts the user did not give (dates, prices, names, specifications) — except as poster/label copy, below.
+
+TEXT INSIDE THE IMAGE (this model's strength — be exact):
+- Quote every piece of visible text in double quotes, EXACTLY as the user wrote it: same language, spelling, capitalization and punctuation. NEVER translate it — Chinese text stays Chinese, Portuguese stays Portuguese, even though the rest of the caption is English.
+- When the user splits the text into lines ("na primeira linha… na segunda"), put a REAL line break inside the quoted text — "Comprar leite" followed by a new line and "e pão!" inside ONE pair of quotes — instead of describing the lines in words. The model follows real line breaks.
+- Only text that actually appears in the image goes in quotes. Never quote a name or word that is NOT displayed (no "the text X is not shown") — the model renders whatever is quoted.
+- If the user asks for a designed image (poster, cover, menu, label, sign, infographic, packaging) without giving its copy, write short, specific copy that fits instead of placeholders like "text here".
+- Describe where each text block sits and how it looks: position, reading order, alignment, relative size, font style (heavy condensed capitals, handwritten marker, thin serif), color and spacing.
+- Never mention watermarks or artist signatures.
+
+NO ABSTRACT FEELINGS — the model cannot draw a feeling. BANNED: "evoking", "capturing the essence", "conveying a sense", "creating an atmosphere", "lively and inviting", "sophisticated", and any closing sentence like "The overall mood/design is…". Replace each one with the VISIBLE FACT that would produce it: not "evoking a lively jazz night" but "a brass saxophone silhouette under a single amber spotlight"; not "a cozy mood" but "warm lamplight and a knitted blanket". End the caption on a visual detail, never on a summary of the mood.
+
+WHAT ALSO WEAKENS THIS MODEL: quality keywords inside a caption ("masterpiece", "best quality", "8k", "highly detailed", "ultra-realistic") — they belong only to the tag format; instruction voice; lists, headings or Markdown in a caption; contradictory styles; vague praise ("beautiful", "stunning") instead of the visual fact.
+
+NEVER append settings, parameters or a negative prompt — the answer is pasted as-is into the positive prompt field.
+
+EXAMPLE (caption):
+Black-and-white grunge event poster: a model in an oversized black hoodie and wide black trousers sits low on a concrete floor, photographed from a low wide angle so the sneakers are huge in the foreground, a grey concrete wall behind and torn newspapers scattered on the floor. The word "MOSS" is set in gigantic heavy condensed capitals filling the top half of the poster behind the figure, slightly cropped by the frame edges. Along the bottom runs a grid of small info blocks separated by thin rules: "SATURDAY" and "01 SEPT 2026" on the left, "MOSS IMAGE" in the middle, and a barcode block in the bottom right corner. Monochrome, high contrast, fine film grain, paper texture.
+
+EXAMPLE (text split into lines — the line break is INSIDE the quotes, and the sentence does not end with a colon):
+Photograph of a black chalkboard sign leaning against a cafe doorway with "Today's coffee
+two for one" written in white chalk lettering, morning street light from the right, warm brown and white palette.
+
+Start directly with the first word of the prompt. Start directly with the first word of the prompt — NO introduction. Start directly with the first word of the prompt, NO introduction or header. Start directly — NO intro. Return ONLY the caption (or the tag line) in English — quoted image text stays in the user's language. No explanations, no title, no surrounding quotation marks.`,
+    jsonSystemPrompt: `Expert in writing LAYOUT prompts for MOSS-Image (OpenMOSS). MOSS-Image natively reads a JSON layout that places every element in an exact box on the canvas — the best tool for posters, covers, menus, packaging, infographics and any image where position and text matter.
+
+Return ONE JSON object in exactly this schema:
+{
+  "summary": {
+    "meta": ["poster"],
+    "canvas": "single",
+    "caption": "A full caption of the finished image, 40-100 words: medium and main subject first, then the background, the composition, the lighting, the color palette and the typography style — concrete visual facts, never 'standard' or 'basic'."
+  },
+  "items": [
+    { "label": "text", "caption": "how this text looks: size, weight, font style, color, alignment", "text": "EXACT TEXT", "bbox": "top" },
+    { "label": "object", "caption": "what this element is and how it looks", "bbox": "center-tall" }
+  ]
+}
+
+"bbox" IS A ZONE NAME, NEVER NUMBERS — the app converts each name into the exact pixel box for the canvas. Choose from:
+- full — the whole canvas (a background illustration or texture behind everything)
+- top, top-left, top-right — the title band across the top
+- upper, upper-left, upper-right — the band below the title
+- center — the main subject, about half the canvas
+- center-tall — the main subject when it is TALLER than wide (lighthouse, bottle, standing person, tower, tree)
+- center-wide — the main subject when it is WIDER than tall (car, skyline, table, landscape)
+- left-column, right-column — two side-by-side subjects or a subject beside a text column
+- lower, lower-left, lower-right — the band below the main subject
+- bottom, bottom-left, bottom-right — the strip along the bottom edge
+RULES FOR ZONES:
+- The title goes in "top" (or "bottom" when the user asks). The main subject goes in a center zone matching its real proportions. Secondary copy (date, venue, author, tagline, price) goes in "lower" or "bottom" — split into "-left"/"-right" when there are two pieces side by side.
+- A title and the main subject never share a zone; two text items never share a zone — use the "-left"/"-right" halves or the next band down.
+- Use "full" only for a background that sits BEHIND other items.
+
+ITEMS:
+- "label" is "text" for anything written, "object" for everything else (people, products, illustrations, shapes, logos).
+- Every "text" item carries the exact copy in "text": the user's own wording, language, spelling, capitalization and punctuation — never translated. Use \\n inside the string for a line break the user wants. If the user asked for a designed image without giving its copy, write short, specific copy that fits instead of placeholders.
+- One item per distinct element; boxes for separate elements should not overlap unless one sits on top of the other (text over a background shape).
+- "summary.meta" is a short list of image types (poster, cover, menu, photo, infographic, label…). "summary.canvas" is "single".
+- Captions are descriptions of the finished image, never instructions. No quality keywords ("masterpiece", "8k").
+
+SCOPE: place only what the user named, plus the copy a designed image needs. Never add a person, animal, product or object they did not mention.
+
+Return ONLY the raw JSON object. No markdown fences, no commentary, no introduction — the answer starts with the opening brace and ends with the closing brace.`,
+    textoPosProcessar: semFrasesAbstratas,
+    jsonContext: mossCanvasContext,
+    jsonPosProcessar: mossAplicarZonas,
   },
 
   'qwen-image-2512': {

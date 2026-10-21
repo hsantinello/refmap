@@ -219,6 +219,18 @@ main resolve pelo idioma do SO (`app.getLocale()`) e o renderer lê via
   com "Content to preserve / Requested changes / Consistency / Do not add";
   várias referências abrindo com "Figure 1: … Figure 2: …" na ORDEM de upload).
 - `metadata/categorizer.ts` — listas de keywords de classificação
+- **Ganchos opcionais de um perfil** (`ModelPromptConfig`): `jsonContext(prompt)`
+  anexa ao system prompt do modo JSON uma instrução montada a partir do pedido;
+  `jsonPosProcessar(json, prompt)` ajusta o JSON já validado; `textoPosProcessar`
+  limpa a prosa final. O perfil **MOSS Image** usa os três: no JSON o modelo só
+  escolhe o NOME da zona ("top", "center-tall"…) e `mossAplicarZonas` converte em
+  pixels do formato detectado no pedido (`mossFormato`: "2:3", "stories",
+  "thumbnail"…) — modelo de linguagem errava as coordenadas (ordem trocada, fora
+  da borda). `semFrasesAbstratas` tira "evoking the feeling of…", "The overall
+  mood is…" etc., que o Llama 3.3 do Together insiste em escrever mesmo com a
+  regra no prompt; nunca toca texto entre aspas. Fontes do perfil: o USERGUIDE do
+  MOSS e o system prompt do enhancer no template `image_moss_image_base_t2i` do
+  Comfy Cloud.
 - `lib/tagExamples.ts`
 
 Esses arquivos estão na lista `IGNORADOS` de `scripts/check-i18n.ts`.

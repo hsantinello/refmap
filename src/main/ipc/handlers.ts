@@ -425,6 +425,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
     // sobre conteúdo, então não compete com o escopo acima.
     const systemPrompt = [
       asJson ? config.jsonSystemPrompt! : config.systemPrompt,
+      asJson ? config.jsonContext?.(prompt) ?? '' : '',
       scopeOverride,
       strictEN
         ? `ABSOLUTE LANGUAGE RULE: your entire answer is written in English. Whatever language the incoming prompt is in, every descriptive word you write is English. The only exception is text inside double quotes that a character speaks aloud or that is displayed on screen — that keeps the user's original wording and language.`
@@ -475,7 +476,8 @@ The sections, element lists, formulas and examples above describe the FULL vocab
       const recorte = ini >= 0 && fim > ini ? semCerca.slice(ini, fim + 1) : semCerca
       try {
         // Reserializa: garante JSON válido e indentação consistente na UI.
-        return JSON.stringify(JSON.parse(recorte), null, 2)
+        const obj = JSON.parse(recorte)
+        return JSON.stringify(config.jsonPosProcessar ? config.jsonPosProcessar(obj, prompt) : obj, null, 2)
       } catch {
         // JSON malformado — devolve o recorte cru. Melhor entregar algo
         // aproveitável do que estourar um erro na cara do usuário.
@@ -483,7 +485,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
       }
     }
     const finalize = (raw: string): string =>
-      asJson ? finalizeJson(raw) : cleanPrompt(stripIntro(raw.replace(/\\n/g, '\n')))
+      asJson ? finalizeJson(raw) : (config.textoPosProcessar ?? (t => t))(cleanPrompt(stripIntro(raw.replace(/\\n/g, '\n'))))
 
     // SEMPRE uma chamada só. O 'en-strict' resolve o idioma no próprio prompt
     // (regra no topo do system, no topo da mensagem e colada no texto do usuário),
