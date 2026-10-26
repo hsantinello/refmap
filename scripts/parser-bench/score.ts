@@ -50,7 +50,8 @@ const PESOS: Record<string, number> = {
 }
 
 const normText = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim()
-const normModel = (s: string) => s.replace(/.*[/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase()
+// Só extensões de modelo de verdade: "sd3.5_large" e "aura_flow_0.2" têm ponto no nome
+const normModel = (s: string) => s.replace(/.*[/\\]/, '').replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft|onnx)$/i, '').toLowerCase()
 
 // Prompt ganha crédito parcial (F1 de palavras): pegar 90% do texto é melhor
 // que pegar o nó errado, e a nota precisa enxergar essa diferença.
