@@ -10,7 +10,7 @@ export interface ComfyLora {
   strengthModel: number
 }
 
-export interface ComfyParams {
+export type ComfyParams = {
   model?: string
   loras?: ComfyLora[]
   sampler?: string
@@ -24,11 +24,37 @@ export interface ComfyParams {
   height?: number
 }
 
+type ComfyNode = { class_type: string; inputs: Record<string, unknown> }
+
+// O ComfyUI grava o grafo com o json.dumps do Python, que escreve NaN/Infinity
+// soltos (JSON inválido). Troca só os que estão FORA de strings por null.
+export function parseComfyJson(s: string): Record<string, unknown> {
+  try {
+    return JSON.parse(s) as Record<string, unknown>
+  } catch {
+    let out = '', inStr = false
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i]
+      if (inStr) {
+        out += c
+        if (c === '\\') out += s[++i] ?? ''
+        else if (c === '"') inStr = false
+        continue
+      }
+      if (c === '"') { inStr = true; out += c; continue }
+      const m = /^-?(NaN|Infinity)/.exec(s.slice(i, i + 9))
+      if (m) { out += 'null'; i += m[0].length - 1; continue }
+      out += c
+    }
+    return JSON.parse(out) as Record<string, unknown>
+  }
+}
+
 export function isComfyUI(raw: Record<string, unknown>): boolean {
   try {
     const promptStr = raw?.prompt ?? raw?.workflow
     if (typeof promptStr !== 'string') return false
-    const parsed = JSON.parse(promptStr) as Record<string, unknown>
+    const parsed = parseComfyJson(promptStr)
     return Object.values(parsed).some(
       (node) => node && typeof node === 'object' && 'class_type' in (node as object)
     )
@@ -39,7 +65,7 @@ export function isComfyUI(raw: Record<string, unknown>): boolean {
 
 export function parseComfyUI(raw: Record<string, unknown>): ExtractionResult {
   const promptStr = (raw.prompt ?? raw.workflow) as string
-  const workflow = JSON.parse(promptStr) as Record<string, { class_type: string; inputs: Record<string, unknown> }>
+  const workflow = parseComfyJson(promptStr) as Record<string, ComfyNode>
 
   let positivePrompt = ''
   let seed: number | undefined
