@@ -18,7 +18,7 @@ export async function extractMetadata(imagePath: string): Promise<ExtractionResu
     // PNG: read chunks directly — exifr is unreliable for tEXt/iTXt chunks
     if (ext === '.png') {
       const raw = readPngTextChunks(imagePath)
-      if (isComfyUI(raw)) return parseComfyUI(raw)
+      if (isComfyUI(raw)) return parseComfyUI(raw, path.basename(imagePath))
       if (isA1111(raw)) return parseA1111(raw)
       if (isMidjourney(raw)) return parseMidjourney(raw)
       return EMPTY_RESULT
