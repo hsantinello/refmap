@@ -10,7 +10,7 @@ export interface ComfyLora {
   strengthModel: number
 }
 
-export interface ComfyParams {
+export type ComfyParams = {
   model?: string
   loras?: ComfyLora[]
   sampler?: string
@@ -24,11 +24,37 @@ export interface ComfyParams {
   height?: number
 }
 
+type ComfyNode = { class_type: string; inputs: Record<string, unknown> }
+
+// O ComfyUI grava o grafo com o json.dumps do Python, que escreve NaN/Infinity
+// soltos (JSON inválido). Troca só os que estão FORA de strings por null.
+export function parseComfyJson(s: string): Record<string, unknown> {
+  try {
+    return JSON.parse(s) as Record<string, unknown>
+  } catch {
+    let out = '', inStr = false
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i]
+      if (inStr) {
+        out += c
+        if (c === '\\') out += s[++i] ?? ''
+        else if (c === '"') inStr = false
+        continue
+      }
+      if (c === '"') { inStr = true; out += c; continue }
+      const m = /^-?(NaN|Infinity)/.exec(s.slice(i, i + 9))
+      if (m) { out += 'null'; i += m[0].length - 1; continue }
+      out += c
+    }
+    return JSON.parse(out) as Record<string, unknown>
+  }
+}
+
 export function isComfyUI(raw: Record<string, unknown>): boolean {
   try {
     const promptStr = raw?.prompt ?? raw?.workflow
     if (typeof promptStr !== 'string') return false
-    const parsed = JSON.parse(promptStr) as Record<string, unknown>
+    const parsed = parseComfyJson(promptStr)
     return Object.values(parsed).some(
       (node) => node && typeof node === 'object' && 'class_type' in (node as object)
     )
@@ -37,9 +63,97 @@ export function isComfyUI(raw: Record<string, unknown>): boolean {
   }
 }
 
-export function parseComfyUI(raw: Record<string, unknown>): ExtractionResult {
+type Grafo = Record<string, ComfyNode>
+type Link = [string, number]
+const isLink = (v: unknown): v is Link => Array.isArray(v) && v.length === 2 && typeof v[0] === 'string' && typeof v[1] === 'number'
+
+// Entradas que carregam texto, em ordem de preferência. "source"/"input"/"any"
+// cobrem nós de passagem (PreviewAny, ShowText, Switch...).
+const TEXT_INPUTS = ['text', 'prompt', 'value', 'string', 'text_g', 'positive_prompt', 'source', 'input', 'any', 'text_a']
+
+// Segue links até achar um texto digitado. Texto gerado em tempo de execução
+// (upsampler, gerador de rosto) não fica no arquivo: nesse caso continua pelas
+// entradas do nó até o pedido original do usuário, ou devolve null.
+function resolveText(g: Grafo, v: unknown, seen = new Set<string>()): string | null {
+  if (typeof v === 'string') return v
+  if (!isLink(v) || seen.has(v[0])) return null
+  seen.add(v[0])
+  const node = g[v[0]]
+  if (!node) return null
+  // Switch (ComfySwitchNode e afins): só o ramo escolhido chegou ao sampler
+  if (typeof node.inputs?.switch === 'boolean' && ('on_true' in node.inputs || 'on_false' in node.inputs)) {
+    return resolveText(g, node.inputs.switch ? node.inputs.on_true : node.inputs.on_false, seen)
+  }
+  for (const key of TEXT_INPUTS) {
+    if (!(key in (node.inputs ?? {}))) continue
+    const t = resolveText(g, node.inputs[key], seen)
+    if (t !== null) return t
+  }
+  return null
+}
+
+// Do conditioning positivo até o nó de texto (atravessa FluxGuidance, Concat, ControlNet...).
+function resolveConditioning(g: Grafo, v: unknown, seen = new Set<string>()): string | null {
+  if (!isLink(v) || seen.has(v[0])) return null
+  seen.add(v[0])
+  const node = g[v[0]]
+  if (!node) return null
+  const inputs = node.inputs ?? {}
+  if (TEXT_INPUTS.some(k => k in inputs) && !('conditioning' in inputs) && !('positive' in inputs)) {
+    return resolveText(g, v)
+  }
+  for (const key of ['positive', 'conditioning', 'conditioning_to', 'conditioning_1', 'guider']) {
+    if (key in inputs) {
+      const t = resolveConditioning(g, inputs[key], seen)
+      if (t !== null) return t
+    }
+  }
+  return null
+}
+
+const SAVE_NODE = /save|image\s*save/i
+const prefixBase = (p: unknown) => (typeof p === 'string' ? p.replace(/.*[/\\]/, '') : '')
+
+// O nó que gravou ESTA imagem: entre vários SaveImage, o de filename_prefix
+// que bate com o nome do arquivo ("Imagem final_00001_.png" ← "Imagem final").
+function pickOutputNode(g: Grafo, fileName?: string): ComfyNode | undefined {
+  const saves = Object.values(g).filter(n => SAVE_NODE.test(n.class_type) && 'images' in (n.inputs ?? {}))
+  const candidates = saves.length ? saves : Object.values(g).filter(n => /preview/i.test(n.class_type) && 'images' in (n.inputs ?? {}))
+  if (candidates.length <= 1 || !fileName) return candidates[0]
+  const name = fileName.toLowerCase()
+  const matches = candidates
+    .filter(n => prefixBase(n.inputs.filename_prefix) && name.startsWith(prefixBase(n.inputs.filename_prefix).toLowerCase()))
+    .sort((a, b) => prefixBase(b.inputs.filename_prefix).length - prefixBase(a.inputs.filename_prefix).length)
+  return matches[0] ?? candidates[0]
+}
+
+const isSampler = (n: ComfyNode) => 'positive' in (n.inputs ?? {}) || 'guider' in (n.inputs ?? {}) || /sampler/i.test(n.class_type) && 'model' in (n.inputs ?? {})
+// Nó de API (Gemini, Seedream, Topaz, Kling...): gera a imagem a partir de
+// prompt/modelo próprios, sem conditioning.
+const isApiGenerator = (n: ComfyNode) => {
+  const i = n.inputs ?? {}
+  return !isSampler(n) && ('prompt' in i || (typeof i.model === 'string' && !/\.(safetensors|ckpt|pt|bin|pth|gguf|sft)$/i.test(i.model)))
+}
+
+// Anda para trás a partir da saída até o primeiro nó que gera imagem.
+function findGenerator(g: Grafo, out: ComfyNode): ComfyNode | undefined {
+  const queue: unknown[] = Object.values(out.inputs ?? {})
+  const seen = new Set<string>()
+  while (queue.length) {
+    const v = queue.shift()
+    if (!isLink(v) || seen.has(v[0])) continue
+    seen.add(v[0])
+    const node = g[v[0]]
+    if (!node) continue
+    if (isSampler(node) || isApiGenerator(node)) return node
+    queue.push(...Object.values(node.inputs ?? {}))
+  }
+  return undefined
+}
+
+export function parseComfyUI(raw: Record<string, unknown>, fileName?: string): ExtractionResult {
   const promptStr = (raw.prompt ?? raw.workflow) as string
-  const workflow = JSON.parse(promptStr) as Record<string, { class_type: string; inputs: Record<string, unknown> }>
+  const workflow = parseComfyJson(promptStr) as Record<string, ComfyNode>
 
   let positivePrompt = ''
   let seed: number | undefined
@@ -54,31 +168,39 @@ export function parseComfyUI(raw: Record<string, unknown>): ExtractionResult {
   let width: number | undefined
   let height: number | undefined
 
-  // KSampler (standard SD) — also covers KSamplerAdvanced
-  const ksampler = Object.values(workflow).find(
-    n => n.class_type === 'KSampler' || n.class_type === 'KSamplerAdvanced'
-  )
-  if (ksampler) {
-    seed  = (ksampler.inputs.seed ?? ksampler.inputs.noise_seed) as number
-    steps = ksampler.inputs.steps as number
-    sampler = ksampler.inputs.sampler_name as string
-    cfg   = ksampler.inputs.cfg as number
-    if (typeof ksampler.inputs.denoise === 'number') denoise = ksampler.inputs.denoise
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+  const str = (v: unknown) => (typeof v === 'string' ? v : undefined)
 
-    const posRef = ksampler.inputs.positive
-    if (Array.isArray(posRef)) {
-      const posNode = workflow[posRef[0] as string]
-      if (posNode?.class_type === 'CLIPTextEncode') {
-        positivePrompt = (posNode.inputs.text as string) ?? ''
-      }
-    }
+  const out = pickOutputNode(workflow, fileName)
+  const gen = out ? findGenerator(workflow, out) : undefined
+  // Sem saída rastreável: o primeiro KSampler do grafo, como antes
+  const ksampler = gen && isSampler(gen) ? gen : (gen ? undefined : Object.values(workflow).find(
+    n => n.class_type === 'KSampler' || n.class_type === 'KSamplerAdvanced'
+  ))
+
+  if (gen && isApiGenerator(gen)) {
+    const i = gen.inputs
+    positivePrompt = resolveText(workflow, i.prompt) ?? ''
+    model = str(i.model)
+    seed = num(i.seed)
+    width = num(i.width); height = num(i.height)
+  } else if (ksampler) {
+    const i = ksampler.inputs
+    seed = num(i.seed ?? i.noise_seed)
+    steps = num(i.steps)
+    sampler = str(i.sampler_name)
+    scheduler = str(i.scheduler)
+    cfg = num(i.cfg)
+    denoise = num(i.denoise)
+    positivePrompt = resolveConditioning(workflow, i.positive ?? i.guider) ?? ''
   }
 
-  // Fallback: first CLIPTextEncode with longest text
-  if (!positivePrompt) {
+  // Fallback (grafo sem saída/gerador reconhecível): CLIPTextEncode com o maior texto
+  if (!positivePrompt && !gen) {
+    const textOf = (n: ComfyNode) => (typeof n.inputs.text === 'string' ? n.inputs.text : '')
     const clips = Object.values(workflow).filter(n => n.class_type === 'CLIPTextEncode')
-    clips.sort((a, b) => ((b.inputs.text as string) ?? '').length - ((a.inputs.text as string) ?? '').length)
-    positivePrompt = (clips[0]?.inputs.text as string) ?? ''
+    clips.sort((a, b) => textOf(b).length - textOf(a).length)
+    positivePrompt = clips[0] ? textOf(clips[0]) : ''
   }
 
   // Walk all nodes once

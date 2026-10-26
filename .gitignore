@@ -15,3 +15,8 @@ ID/Salvamento automático*/
 
 # Arquivos temporários
 electron.vite.config.*.mjs
+
+# Parser bench: imagens e gabaritos são pessoais (ver parser-bench/README.md)
+parser-bench/dev/
+parser-bench/holdout/
+parser-bench/results.tsv

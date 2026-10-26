@@ -18,6 +18,8 @@
     "typecheck:web": "tsc -p tsconfig.check-web.json",
     "typecheck:node": "tsc -p tsconfig.check-node.json",
     "check:i18n": "tsx scripts/check-i18n.ts",
+    "bench:parsers": "tsx scripts/parser-bench/score.ts",
+    "bench:draft": "tsx scripts/parser-bench/draft.ts",
     "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
   "build": {

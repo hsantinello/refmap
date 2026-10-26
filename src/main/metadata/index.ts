@@ -1,5 +1,6 @@
 import path from 'path'
 import { readPngTextChunks } from './pngChunks'
+import { readExifMetadata } from './exif'
 import type { ExtractionResult } from './comfyui'
 import { isComfyUI, parseComfyUI } from './comfyui'
 import { isA1111, parseA1111 } from './a1111'
@@ -18,26 +19,19 @@ export async function extractMetadata(imagePath: string): Promise<ExtractionResu
     // PNG: read chunks directly — exifr is unreliable for tEXt/iTXt chunks
     if (ext === '.png') {
       const raw = readPngTextChunks(imagePath)
-      if (isComfyUI(raw)) return parseComfyUI(raw)
+      if (isComfyUI(raw)) return parseComfyUI(raw, path.basename(imagePath))
       if (isA1111(raw)) return parseA1111(raw)
       if (isMidjourney(raw)) return parseMidjourney(raw)
       return EMPTY_RESULT
     }
 
-    // JPG/WEBP: try exifr for EXIF/XMP
-    const exifr = await import('exifr')
-    const raw = await exifr.default.parse(imagePath, {
-      userComment: true,
-      xmp: true,
-      tiff: true,
-      translateValues: false,
-      mergeOutput: true,
-    }) as Record<string, unknown> | null
-
+    // JPG/WEBP: EXIF/XMP, com prompt/workflow do ComfyUI e UserComment do A1111 já extraídos
+    const raw = await readExifMetadata(imagePath)
     if (!raw) return EMPTY_RESULT
 
-    if (isA1111(raw as Record<string, unknown>)) return parseA1111(raw as Record<string, unknown>)
-    if (isMidjourney(raw as Record<string, unknown>)) return parseMidjourney(raw as Record<string, unknown>)
+    if (isComfyUI(raw)) return parseComfyUI(raw, path.basename(imagePath))
+    if (isA1111(raw)) return parseA1111(raw)
+    if (isMidjourney(raw)) return parseMidjourney(raw)
 
     return EMPTY_RESULT
   } catch (err) {
