@@ -227,7 +227,7 @@ main resolve pelo idioma do SO (`app.getLocale()`) e o renderer lê via
   pixels do formato detectado no pedido (`mossFormato`: "2:3", "stories",
   "thumbnail"…) — modelo de linguagem errava as coordenadas (ordem trocada, fora
   da borda). `semFrasesAbstratas` tira "evoking the feeling of…", "The overall
-  mood is…" etc., que o Llama 3.3 do Together insiste em escrever mesmo com a
+  mood is…" etc., que o Llama 3.3 do Together (o modelo de texto até out/2026) insistia em escrever mesmo com a
   regra no prompt; nunca toca texto entre aspas. Fontes do perfil: o USERGUIDE do
   MOSS e o system prompt do enhancer no template `image_moss_image_base_t2i` do
   Comfy Cloud.
@@ -337,6 +337,13 @@ Todo canal IPC deve ler `win` da variável de módulo, nunca capturar a janela.
   `TOGETHER_VISION_MODELS`/`VISION_MAX_TOKENS` (`ai/openai.ts`). Para conferir,
   mande uma imagem real a `/v1/chat/completions` — `/v1/models` lista modelos
   que não são serverless.
+- **Texto no Together** (`tags:translate` e otimizador de prompt) usa
+  `TOGETHER_TEXT_MODELS` (`ai/openai.ts`): `openai/gpt-oss-120b`, com o
+  `MiniMax-M3` de reserva, via `chatComReserva` (pula para o próximo se um
+  recusar). Em 26/10/2026 o `Llama-3.3-70B-Instruct-Turbo` passou a dar 400
+  "non-serverless", assim como Llama 3.1/4, Mistral Small, DeepSeek-V3.1,
+  GLM-4.7, gemma-4 e gpt-oss-20b; Qwen3.7-Plus/3.8-Flash só aceitam `stream`.
+  O gpt-oss não recusa prompt NSFW, mas suaviza a redação.
 
 ## Integração ComfyUI (painel "ComfyUI" na barra)
 

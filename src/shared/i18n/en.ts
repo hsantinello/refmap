@@ -72,7 +72,7 @@ export const en = {
   'settings.api.groupNsfw':       'NSFW +18',
   'settings.api.desc.anthropic':  'claude-haiku-4-5 — Fast and cheap',
   'settings.api.desc.openai':     'gpt-4o-mini — Fast and cheap · Supports voice transcription',
-  'settings.api.desc.together':   'Llama 3.3 70B — uncensored, NSFW prompts',
+  'settings.api.desc.together':   'gpt-oss 120B — open model, NSFW prompts',
   'settings.api.keyLabel':        'Key',
   'settings.api.getKey':          'Get your API Key →',
   'settings.api.keyStored':       'Your key is stored locally with end-to-end encryption.',
