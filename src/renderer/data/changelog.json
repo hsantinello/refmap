@@ -1,5 +1,19 @@
 [
   {
+    "version": "0.0.38",
+    "date": "2026-11-03",
+    "items": [
+      "Ref Map para Linux (x64): AppImage, que roda em qualquer distribuição e se atualiza sozinho, e pacote .deb para Ubuntu/Debian.",
+      "No Linux a janela fica sempre no topo como no Windows e no Mac, e a IA local é instalada e desinstalada pelo próprio app, sem senha de administrador.",
+      "Leitura de metadados: imagens WEBP e JPG do ComfyUI e do A1111 agora mostram o prompt; no ComfyUI o prompt vem do nó que gerou a imagem salva; no A1111/Forge entram Size, Schedule type e Distilled CFG Scale."
+    ],
+    "items_en": [
+      "Ref Map for Linux (x64): AppImage, which runs on any distribution and updates itself, and a .deb package for Ubuntu/Debian.",
+      "On Linux the window stays always on top like on Windows and Mac, and the local AI is installed and uninstalled by the app itself, with no administrator password.",
+      "Metadata reading: WEBP and JPG images from ComfyUI and A1111 now show the prompt; in ComfyUI the prompt comes from the node that generated the saved image; A1111/Forge now read Size, Schedule type and Distilled CFG Scale."
+    ]
+  },
+  {
     "version": "0.0.37",
     "date": "2026-10-21",
     "items": [

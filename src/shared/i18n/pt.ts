@@ -368,7 +368,7 @@ export const pt: Record<I18nKey, string> = {
   'error.offline.act':            'Verifique a sua conexão e tente de novo.',
   'error.installInterrupted.msg': 'A instalação da IA local foi interrompida antes de terminar.',
   'error.installInterrupted.act': 'Clique em "Tentar de novo". Se repetir, instale o Ollama manualmente pelo site ollama.com.',
-  'error.windowsOnly.msg':        'A instalação automática da IA local só está disponível no Windows e no Mac.',
+  'error.windowsOnly.msg':        'A instalação automática da IA local só está disponível no Windows, no Mac e no Linux (x64).',
   'error.windowsOnly.act':        'Instale o Ollama pelo site ollama.com e o app o reconhece sozinho.',
   'error.downloadFailed.msg':     'O download não foi concluído.',
   'error.downloadFailed.act':     'Verifique a sua conexão e clique em "Tentar de novo".',

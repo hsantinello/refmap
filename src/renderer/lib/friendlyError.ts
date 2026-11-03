@@ -171,7 +171,7 @@ const RULES: Rule[] = [
     actionKey: 'error.installInterrupted.act',
   },
   {
-    test: /apenas no Windows|only on Windows/i,
+    test: /apenas no Windows|only on Windows|only for x64/i,
     recovery: 'none',
     messageKey: 'error.windowsOnly.msg',
     actionKey: 'error.windowsOnly.act',

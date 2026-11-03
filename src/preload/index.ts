@@ -28,6 +28,8 @@ const api = {
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   // 'darwin' | 'win32' | … — a interface muda um ou outro fluxo no Mac.
   platform: process.platform,
+  // Mesmo critério do updater: Mac e Linux .deb atualizam pela página de download.
+  atualizaPelaPagina: process.platform === 'darwin' || (process.platform === 'linux' && !process.env.APPIMAGE),
 
   // Vídeo → cenas
   openVideoPicker: (): Promise<string | null> => ipcRenderer.invoke('video:openFilePicker'),

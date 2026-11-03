@@ -11,7 +11,7 @@ on:
         required: false
         default: all
         type: choice
-        options: [all, windows, mac]
+        options: [all, windows, mac, linux]
 
 permissions:
   contents: write
@@ -120,3 +120,39 @@ jobs:
         # --publish always é obrigatório: sem ele o electron-builder só builda e
         # o latest.yml nunca sobe, deixando o auto-update cego.
         run: npx electron-vite build && npx electron-builder --win --publish always
+
+  build-linux:
+    # AppImage (roda em qualquer distribuição e se atualiza sozinho) + .deb
+    # (Ubuntu/Debian). Compilado em Ubuntu x64: os binários nativos (better-sqlite3,
+    # sharp, ffmpeg) saem para x64, a mesma arquitetura dos pacotes.
+    name: Build Linux (x64)
+    runs-on: ubuntu-latest
+    needs: release
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'linux' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+
+      # sharp NATIVO derruba o app no Linux (segmentation fault em qualquer
+      # operação): o Electron carrega a GLib do sistema e a libvips do sharp traz a
+      # própria — duas GLib no mesmo processo. A versão WebAssembly não usa
+      # biblioteca do sistema. Testado no WSL2: miniatura 2000→900 px em ~0,4 s.
+      # O scripts/after-pack.cjs derruba o build se o nativo voltar ao pacote.
+      - name: sharp WebAssembly no lugar do nativo
+        run: |
+          V=$(node -p "require('./node_modules/sharp/package.json').version")
+          npm install --no-save --force --no-audit --no-fund "@img/sharp-wasm32@$V"
+          rm -rf node_modules/@img/sharp-linux-* node_modules/@img/sharp-libvips-linux* node_modules/@img/sharp-linuxmusl-* node_modules/@img/sharp-libvips-linuxmusl-*
+          ls node_modules/@img
+
+      - name: Build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # --publish always: sobe o latest-linux.yml, que o AppImage usa para se atualizar.
+        run: npx electron-vite build && npx electron-builder --linux --x64 --publish always

@@ -9,10 +9,17 @@ import { blindarWebContents, definirUrlDoApp } from './security'
 import { registrarEsquemaPrivilegiado, registrarProtocolo } from './media-protocol'
 import { limparArquivosOrfaos } from './housekeeping'
 import { matarFfmpegAtivos } from './video/extractScenes'
+import { iniciarOllamaLinuxSeInstalado } from './ai/localInstall'
 import { translate, normalizeLang } from '../shared/i18n'
 
 // Tem de acontecer antes de o app ficar pronto — depois disso o Chromium não aceita mais.
 registrarEsquemaPrivilegiado()
+
+// Linux: no Wayland (padrão do Ubuntu/Fedora atuais) o compositor não deixa um
+// app se pôr acima dos outros, e "sempre no topo" é a função central do Ref Map.
+// Forçamos X11 (XWayland), onde setAlwaysOnTop funciona. O Electron 36 já abre
+// em X11 por padrão; isto garante o mesmo quando ele passar a preferir Wayland.
+if (process.platform === 'linux') app.commandLine.appendSwitch('ozone-platform', 'x11')
 
 let win: BrowserWindow | null = null
 
@@ -95,6 +102,8 @@ app.whenReady().then(() => {
   // Com a janela já na tela e sem bloquear nada: miniaturas, quadros de vídeo,
   // colagens e cache que nenhum nó usa mais.
   setTimeout(() => void limparArquivosOrfaos(), 5000)
+  // Linux: sobe o Ollama que o próprio app extraiu (não abre sozinho com o sistema).
+  void iniciarOllamaLinuxSeInstalado().catch(() => {})
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

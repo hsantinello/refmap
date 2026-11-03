@@ -439,6 +439,45 @@ gerar o certificado). Consequências e o que foi feito:
 - A config de build que vale é a do `package.json` (`build`); o
   `electron-builder.config.ts` não é usado.
 
+## Linux (x64)
+
+- **Pacotes:** AppImage (qualquer distribuição, se atualiza sozinho) + .deb
+  (Ubuntu/Debian), nomes fixos `Ref-Map-Linux-x64.AppImage` / `.deb`, job
+  `build-linux` (ubuntu-latest) no `publish.yml`. Sem arch na config (vale o
+  `--x64` do comando, como no Mac). Mantenedor do .deb = e-mail noreply do
+  GitHub, para não expor e-mail pessoal no pacote público.
+- **Sempre no topo:** no Wayland o compositor não deixa o app ficar por cima;
+  `src/main/index.ts` força `ozone-platform=x11` (XWayland). O Electron 36 já
+  abre em X11, mas isso protege a função central quando ele preferir Wayland.
+- **Atualização:** AppImage usa o electron-updater normal (detectado pela
+  variável `APPIMAGE`); o .deb exige senha de admin para instalar, então lá o
+  "Baixar" abre a página da release, como no Mac (`ATUALIZA_PELA_PAGINA` no
+  updater e `window.api.atualizaPelaPagina` no preload).
+- **IA local:** o install.sh oficial do Ollama pede sudo; o app baixa o pacote
+  `ollama-linux-amd64.tar.zst` (~1,5 GB, traz as libs CUDA) para
+  `userData/ollama` e roda `ollama serve`. O .zst é aberto pelo zlib do Node
+  (o Electron 36 tem Node 22.19) e só o desempacotamento vai para o `tar` — o
+  programa `zstd` não vem em instalações enxutas. Baixa no userData, não no
+  /tmp (tmpfs na RAM em várias distros). Esse Ollama não sobe com o sistema:
+  `iniciarOllamaLinuxSeInstalado()` o inicia no boot do app. Desinstalar só
+  remove o que o app extraiu; Ollama do sistema pede o gerenciador de pacotes.
+- **sharp é WebAssembly no Linux** (`@img/sharp-wasm32`, trocado no job
+  `build-linux` do `publish.yml`). O nativo dá segmentation fault em QUALQUER
+  operação dentro do Electron: o Electron carrega a GLib do sistema e a libvips
+  do sharp traz a própria. O `after-pack.cjs` derruba o build se o nativo voltar.
+  Miniatura 2000→900 px em ~0,4 s no WSL2.
+- **asarUnpack** inclui `sharp/**` e `@img/**`: a libvips do Linux se chama
+  `libvips-cpp.so.8.17.3`, e o electron-builder só desempacota sozinho o que
+  termina em `.so` — ficava presa no app.asar. Inofensivo no Windows/Mac
+  (conferido: sharp e better-sqlite3 carregam no pacote do Windows).
+- **Chaves de API:** o `safeStorage` usa o chaveiro do sistema (GNOME Keyring /
+  KWallet). Sem chaveiro, o Electron cai no backend `basic_text`, bem mais fraco.
+- **AppImage no Ubuntu 22.04+** precisa de `libfuse2` (24.04: `libfuse2t64`);
+  a instrução está no rodapé da release.
+- **Teste local:** WSL2 (Ubuntu) com WSLg. Sem sudo: Node do nodejs.org em
+  `~/node22` e as libs do Electron extraídas com `apt-get download` + `dpkg -x`
+  em `~/rmlibs/root` (via `LD_LIBRARY_PATH`).
+
 ## Princípios de Desenvolvimento
 
 - **100% local** — nenhum dado enviado a servidores próprios

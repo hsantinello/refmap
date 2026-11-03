@@ -1,6 +1,6 @@
 {
   "name": "refmap",
-  "version": "0.0.37",
+  "version": "0.0.38",
   "description": "Canvas flutuante de referências para criadores de IA",
   "main": "out/main/index.js",
   "author": "Ref Map",
@@ -31,7 +31,9 @@
     "copyright": "Copyright © 2026",
     "compression": "normal",
     "asarUnpack": [
-      "node_modules/ffmpeg-static/**"
+      "node_modules/ffmpeg-static/**",
+      "node_modules/sharp/**",
+      "node_modules/@img/**"
     ],
     "extraResources": [
       {
@@ -79,6 +81,36 @@
       "extendInfo": {
         "NSMicrophoneUsageDescription": "O Ref Map usa o microfone para ditar prompts por voz. / Ref Map uses the microphone to dictate prompts by voice."
       }
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "artifactName": "Ref-Map-Linux-${arch}.${ext}",
+      "executableName": "refmap",
+      "icon": "build/icon.png",
+      "category": "Graphics",
+      "synopsis": "Canvas flutuante de referências para criadores de IA",
+      "maintainer": "Ref Map <hsantinello@users.noreply.github.com>",
+      "vendor": "Ref Map"
+    },
+    "appImage": {
+      "artifactName": "Ref-Map-Linux-x64.${ext}"
+    },
+    "deb": {
+      "artifactName": "Ref-Map-Linux-x64.${ext}",
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0"
+      ]
     },
     "afterPack": "scripts/after-pack.cjs",
     "dmg": {

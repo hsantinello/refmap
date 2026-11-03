@@ -35,4 +35,7 @@ console.log([
   '---',
   '**Mac:** baixe `Ref-Map-Mac-arm64.dmg` (chip Apple: M1, M2, M3, M4…) ou `Ref-Map-Mac-x64.dmg` (Intel). Para saber qual é o seu: menu Apple → Sobre Este Mac → "Chip" (Apple) ou "Processador" (Intel).',
   'Na primeira abertura o Mac pode bloquear: abra o Ref Map, feche o aviso, vá em **Ajustes do Sistema → Privacidade e Segurança**, role até o fim e clique em **Abrir Mesmo Assim**.',
+  '',
+  '**Linux (x64):** baixe `Ref-Map-Linux-x64.AppImage` (qualquer distribuição, se atualiza sozinho) ou `Ref-Map-Linux-x64.deb` (Ubuntu/Debian: `sudo apt install ./Ref-Map-Linux-x64.deb`).',
+  'AppImage: dê permissão de execução (`chmod +x Ref-Map-Linux-x64.AppImage`) e abra. No Ubuntu 22.04 ou mais novo, se não abrir, instale `sudo apt install libfuse2` (no 24.04: `libfuse2t64`).',
 ].join('\n'))

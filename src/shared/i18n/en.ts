@@ -373,7 +373,7 @@ export const en = {
   'error.offline.act':            'Check your connection and try again.',
   'error.installInterrupted.msg': 'The local AI installation stopped before finishing.',
   'error.installInterrupted.act': 'Click "Try again". If it repeats, install Ollama manually from ollama.com.',
-  'error.windowsOnly.msg':        'Automatic local AI installation is only available on Windows and Mac.',
+  'error.windowsOnly.msg':        'Automatic local AI installation is only available on Windows, Mac and Linux (x64).',
   'error.windowsOnly.act':        'Install Ollama from ollama.com and the app will pick it up on its own.',
   'error.downloadFailed.msg':     'The download did not complete.',
   'error.downloadFailed.act':     'Check your connection and click "Try again".',

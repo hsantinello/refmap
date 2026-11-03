@@ -5,6 +5,12 @@ import { handleSeguro } from './security'
 
 let win: BrowserWindow | null = null
 const RELEASES_URL = 'https://github.com/hsantinello/refmap/releases/latest'
+// Onde o app não consegue se atualizar sozinho, o 'Baixar' abre a página da
+// versão nova: no Mac (sem assinatura da Apple, o Squirrel.Mac recusa) e no
+// Linux instalado pelo .deb (instalar o pacote exige senha de administrador).
+// O AppImage se atualiza sozinho, como o Windows — o Linux o reconhece pela
+// variável APPIMAGE que o próprio AppImage define.
+const ATUALIZA_PELA_PAGINA = process.platform === 'darwin' || (process.platform === 'linux' && !process.env.APPIMAGE)
 let updateReady = false   // true quando uma atualização já foi BAIXADA e está pronta
 let closeDecided = false  // evita reabrir o diálogo na segunda passada do 'close'
 
@@ -63,7 +69,7 @@ export function initUpdater(mainWindow: BrowserWindow): void {
   // atualização de app sem assinatura. Em vez de uma barra que nunca termina,
   // abrimos a página da versão nova para a pessoa baixar o .dmg.
   handleSeguro('updater:download', () => {
-    if (process.platform === 'darwin') {
+    if (ATUALIZA_PELA_PAGINA) {
       void shell.openExternal(RELEASES_URL)
       return 'external'
     }

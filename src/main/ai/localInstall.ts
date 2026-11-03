@@ -5,6 +5,7 @@ import { pipeline } from 'stream/promises'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import zlib from 'zlib'
 import { getLocalConfig, getLocalTextConfig } from './local'
 import { tm } from '../i18n'
 
@@ -86,6 +87,68 @@ async function installMacOllama(win: BrowserWindow): Promise<string> {
   throw new Error('Could not copy Ollama.app to Applications.')
 }
 
+// ── Linux ────────────────────────────────────────────────────────────────────
+// O instalador oficial (install.sh) exige sudo e cria um serviço systemd. Em vez
+// dele usamos o pacote oficial que roda SEM instalar: extraído numa pasta do
+// próprio app e iniciado com "ollama serve". Sem senha de administrador.
+const IS_LINUX = process.platform === 'linux'
+const OLLAMA_LINUX_URL = 'https://ollama.com/download/ollama-linux-amd64.tar.zst'
+
+function linuxOllamaDir(): string {
+  return path.join(app.getPath('userData'), 'ollama')
+}
+// Primeiro o nosso; depois o que a pessoa instalou pelo script oficial.
+function existingOllamaLinux(): string | null {
+  const candidatos = [path.join(linuxOllamaDir(), 'bin', 'ollama'), '/usr/local/bin/ollama', '/usr/bin/ollama']
+  return candidatos.find(p => fs.existsSync(p)) ?? null
+}
+
+// No Windows e no Mac o Ollama abre com o sistema; o que o app extraiu no Linux,
+// não. Sem isto, depois de reiniciar o PC a IA local aparecia "desligada" até a
+// pessoa clicar em instalar de novo. Chamado no boot do app.
+export async function iniciarOllamaLinuxSeInstalado(): Promise<void> {
+  if (!IS_LINUX) return
+  const bin = path.join(linuxOllamaDir(), 'bin', 'ollama')
+  if (!fs.existsSync(bin) || await isOllamaUp(apiRoot())) return
+  const srv = spawn(bin, ['serve'], { detached: true, stdio: 'ignore' })
+  srv.on('error', e => console.error('[ollama] spawn do "ollama serve" falhou:', e))
+  srv.unref()
+}
+
+async function installLinuxOllama(win: BrowserWindow): Promise<string> {
+  if (process.arch !== 'x64') throw new Error('Automatic installation on Linux is only for x64.')
+  // ~1,5 GB (traz as bibliotecas CUDA). Baixa dentro do userData, não no /tmp —
+  // em várias distribuições o /tmp é tmpfs, na RAM, e não comporta o arquivo.
+  const baixando = `${linuxOllamaDir()}-download`
+  fs.rmSync(baixando, { recursive: true, force: true })
+  fs.mkdirSync(baixando, { recursive: true })
+  const arquivo = path.join(baixando, 'ollama-linux-amd64.tar.zst')
+
+  send(win, { phase: 'downloading', percent: 0, message: tm('main.install.downloading') })
+  await downloadFile(OLLAMA_LINUX_URL, arquivo, pct =>
+    send(win, { phase: 'downloading', percent: pct, message: tm('main.install.downloading') }))
+
+  send(win, { phase: 'installing', percent: -1, message: tm('main.install.installing') })
+  const destino = linuxOllamaDir()
+  fs.rmSync(destino, { recursive: true, force: true })
+  fs.mkdirSync(destino, { recursive: true })
+  // O .zst é aberto pelo próprio Node (zlib), e o tar comum só desempacota. Antes
+  // usávamos "tar --zstd", que depende do programa zstd — ausente em instalações
+  // enxutas (o Ubuntu 26.04 do WSL não tem), e a IA local falhava ali.
+  const tar = spawn('tar', ['-xf', '-', '-C', destino], { stdio: ['pipe', 'ignore', 'ignore'] })
+  const tarTerminou = new Promise<number>(resolve => {
+    tar.on('error', () => resolve(-1))
+    tar.on('exit', code => resolve(code ?? -1))
+  })
+  await pipeline(fs.createReadStream(arquivo), zlib.createZstdDecompress(), tar.stdin)
+  if (await tarTerminou !== 0) throw new Error('Could not extract Ollama.')
+  fs.rm(baixando, { recursive: true, force: true }, () => {})
+  const bin = path.join(destino, 'bin', 'ollama')
+  if (!fs.existsSync(bin)) throw new Error('Ollama binary not found in the download.')
+  fs.chmodSync(bin, 0o755)
+  return bin
+}
+
 function send(win: BrowserWindow, p: InstallProgress): void {
   if (!win.isDestroyed()) win.webContents.send('local:installProgress', p)
 }
@@ -112,7 +175,9 @@ async function waitForOllama(root: string, timeoutMs: number): Promise<boolean> 
 }
 
 // Caminho padrão do ollama.exe numa instalação por-usuário do Windows.
+// No Linux, o binário extraído pelo app (ou o do script oficial).
 function existingOllamaExe(): string | null {
+  if (IS_LINUX) return existingOllamaLinux()
   const local = process.env.LOCALAPPDATA
   if (!local) return null
   const p = path.join(local, 'Programs', 'Ollama', 'ollama.exe')
@@ -277,7 +342,23 @@ export async function uninstallLocal(win: BrowserWindow): Promise<void> {
       send(win, { phase: 'done', percent: 100, message: tm('main.install.uninstalled') })
       return
     }
-    if (process.platform !== 'win32') throw new Error('Automatic uninstall is only on Windows and macOS.')
+    if (IS_LINUX) {
+      // Só removemos o que o próprio app extraiu. Um Ollama instalado pelo script
+      // oficial (/usr/local/bin, serviço systemd) exige sudo para sair.
+      const dir = linuxOllamaDir()
+      if (!fs.existsSync(path.join(dir, 'bin', 'ollama'))) {
+        throw new Error('Ollama was installed by the system, not by Ref Map — remove it with the package manager or the official uninstall steps.')
+      }
+      send(win, { phase: 'uninstalling', percent: -1, message: tm('main.install.stopping') })
+      await run('pkill', ['-f', path.join(dir, 'bin', 'ollama')])
+      await new Promise(r => setTimeout(r, 1500))
+      send(win, { phase: 'uninstalling', percent: -1, message: tm('main.install.removing') })
+      fs.rmSync(dir, { recursive: true, force: true })
+      if (fs.existsSync(dir)) throw new Error('Uninstall did not complete; Ollama is still installed.')
+      send(win, { phase: 'done', percent: 100, message: tm('main.install.uninstalled') })
+      return
+    }
+    if (process.platform !== 'win32') throw new Error('Automatic uninstall is only on Windows, macOS and Linux.')
     const local = process.env.LOCALAPPDATA
     const ollamaExe = local ? path.join(local, 'Programs', 'Ollama', 'ollama.exe') : ''
 
@@ -358,10 +439,21 @@ export async function installLocalAI(win: BrowserWindow): Promise<void> {
       if (!up) throw new Error('Ollama installed but the service did not respond.')
     }
 
+    // Não instalado → baixa e extrai (Linux, sem sudo).
+    if (!up && IS_LINUX) {
+      const bin = await installLinuxOllama(win)
+      send(win, { phase: 'starting', percent: -1, message: tm('main.install.starting') })
+      const srv = spawn(bin, ['serve'], { detached: true, stdio: 'ignore' })
+      srv.on('error', e => console.error('[install] spawn do "ollama serve" falhou:', e))
+      srv.unref()
+      up = await waitForOllama(root, 60_000)
+      if (!up) throw new Error('Ollama installed but the service did not respond.')
+    }
+
     // Não instalado → baixa e instala (Windows).
     if (!up) {
       if (process.platform !== 'win32') {
-        throw new Error('Automatic installation is only on Windows and macOS.')
+        throw new Error('Automatic installation is only on Windows, macOS and Linux.')
       }
       const dir = path.join(app.getPath('temp'), 'refmap-ollama')
       fs.mkdirSync(dir, { recursive: true })

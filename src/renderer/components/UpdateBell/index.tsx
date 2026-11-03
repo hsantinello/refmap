@@ -168,8 +168,8 @@ export default function UpdateBell() {
               {update.status === 'available' && (
                 <button
                   onClick={async () => {
-                    // No Mac o main abre a página de download ('external'): não há barra de progresso.
-                    if (window.api.platform === 'darwin') { await window.api.downloadUpdate(); return }
+                    // Mac e Linux .deb: o main abre a página de download ('external'), sem barra de progresso.
+                    if (window.api.atualizaPelaPagina) { await window.api.downloadUpdate(); return }
                     setUpdate({ status: 'downloading', percent: 0 })
                     window.api.downloadUpdate()
                   }}

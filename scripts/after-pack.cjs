@@ -56,7 +56,21 @@ function binariosNativos(dir) {
   return achados
 }
 
+// Linux: o sharp tem de ser o WebAssembly. O nativo traz uma GLib própria que
+// briga com a do sistema (carregada pelo Electron) e derruba o app em qualquer
+// operação de imagem. O publish.yml troca um pelo outro; aqui só conferimos.
+function conferirSharpLinux(context) {
+  const img = path.join(context.appOutDir, 'resources', 'app.asar.unpacked', 'node_modules', '@img')
+  const tem = nome => fs.existsSync(path.join(img, nome))
+  const nativos = fs.existsSync(img) ? fs.readdirSync(img).filter(n => /^sharp-(libvips-)?linux/.test(n)) : []
+  if (!tem('sharp-wasm32') || nativos.length) {
+    throw new Error(`[after-pack] Linux precisa do sharp WebAssembly e sem o nativo — wasm32: ${tem('sharp-wasm32')}, nativos: ${nativos.join(', ') || 'nenhum'}`)
+  }
+  console.log('[after-pack] Linux: sharp WebAssembly ok')
+}
+
 exports.default = async function afterPack(context) {
+  if (context.electronPlatformName === 'linux') return conferirSharpLinux(context)
   if (context.electronPlatformName !== 'darwin') return
   const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
   const arch = ARCH[context.arch]
