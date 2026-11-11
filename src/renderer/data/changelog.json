@@ -1,5 +1,19 @@
 [
   {
+    "version": "0.0.39",
+    "date": "2026-11-11",
+    "items": [
+      "Otimizador de prompts: novo perfil MiniMax H3 Image para imagem parada — descrição em prosa no estilo do template oficial, com o texto da imagem entre aspas.",
+      "Novo perfil MiniMax H3 Ref. (vídeo) para gerar com imagens de referência ou quadro inicial/final, nos formatos oficiais do guia da MiniMax, incluindo fala e referência de voz.",
+      "Together: tradução de tags e otimizador voltaram a funcionar — o modelo de texto antigo saiu do catálogo da Together."
+    ],
+    "items_en": [
+      "Prompt optimizer: new MiniMax H3 Image profile for still images — a prose description in the style of the official template, with on-image text in quotes.",
+      "New MiniMax H3 Ref. profile (video) for generating from reference images or start/end frames, in the official MiniMax guide formats, including dialogue and voice referencing.",
+      "Together: tag translation and the optimizer work again — the old text model was removed from the Together catalog."
+    ]
+  },
+  {
     "version": "0.0.38",
     "date": "2026-11-03",
     "items": [
