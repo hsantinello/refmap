@@ -72,7 +72,7 @@ export const pt: Record<I18nKey, string> = {
   'settings.api.groupNsfw':       'NSFW +18',
   'settings.api.desc.anthropic':  'claude-haiku-4-5 — Rápido e econômico',
   'settings.api.desc.openai':     'gpt-4o-mini — Rápido e econômico · Aceita transcrição por voz',
-  'settings.api.desc.together':   'Llama 3.3 70B — sem censura, prompts NSFW',
+  'settings.api.desc.together':   'gpt-oss 120B — modelo aberto, prompts NSFW',
   'settings.api.keyLabel':        'Chave',
   'settings.api.getKey':          'Gere sua API Key →',
   'settings.api.keyStored':       'Sua chave é salva localmente com criptografia de ponta a ponta.',

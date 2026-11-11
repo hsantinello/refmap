@@ -24,7 +24,7 @@
 }
 
 // ── Frases abstratas ──────────────────────────────────────────────────────────
-// Modelos de texto menores (Llama 3.3 no Together, Dolphin local) insistem em
+// Modelos de texto menores (o Llama 3.3 que o Together usava até out/2026, Dolphin local) insistem em
 // fechar a descrição com sentimento — "evoking the feeling of a lively jazz
 // performance", "The overall design is lively and inviting" — mesmo com a regra
 // no prompt. Para um modelo treinado com LEGENDAS (MOSS) isso é ruído: ele não

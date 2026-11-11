@@ -8,7 +8,7 @@ import { canvasQueries, nodeQueries, tagQueries, settingQueries, aiCacheQueries 
 import { extractMetadata } from '../metadata'
 import { analyzeWithAnthropic } from '../ai/anthropic'
 import { criarAnthropic } from '../ai/anthropicClient'
-import { analyzeWithOpenAI, TOGETHER_VISION_MODELS, VISION_MAX_TOKENS, semRaciocinio } from '../ai/openai'
+import { analyzeWithOpenAI, TOGETHER_VISION_MODELS, TOGETHER_TEXT_MODELS, VISION_MAX_TOKENS, semRaciocinio, chatComReserva } from '../ai/openai'
 import { MODEL_PROMPT_CONFIGS, IMAGE_MODEL_IDS } from '../ai/model-prompts'
 import { getLocalConfig, getLocalTextConfig, localChat, isLocalUnavailable, LOCAL_AI_UNAVAILABLE } from '../ai/local'
 import { installLocalAI, uninstallLocal } from '../ai/localInstall'
@@ -457,15 +457,11 @@ The sections, element lists, formulas and examples above describe the FULL vocab
         const client = effectiveProvider === 'together'
           ? new OpenAI({ apiKey, baseURL: 'https://api.together.xyz/v1' })
           : new OpenAI({ apiKey })
-        const model = effectiveProvider === 'together' ? 'meta-llama/Llama-3.3-70B-Instruct-Turbo' : 'gpt-4o-mini'
-        const completion = await client.chat.completions.create({
-          model,
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user },
-          ],
-        }, signal ? { signal } : undefined)
-        return completion.choices[0].message.content?.trim() ?? ''
+        const models = effectiveProvider === 'together' ? TOGETHER_TEXT_MODELS : ['gpt-4o-mini']
+        return await chatComReserva(client, models, [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ], signal)
       }
     }
 
@@ -607,12 +603,8 @@ The sections, element lists, formulas and examples above describe the FULL vocab
       const client = effectiveProvider === 'together'
         ? new OpenAI({ apiKey, baseURL: 'https://api.together.xyz/v1' })
         : new OpenAI({ apiKey })
-      const model = effectiveProvider === 'together' ? 'meta-llama/Llama-3.3-70B-Instruct-Turbo' : 'gpt-4o-mini'
-      const completion = await client.chat.completions.create({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-      })
-      raw = completion.choices[0].message.content?.trim() ?? '[]'
+      const models = effectiveProvider === 'together' ? TOGETHER_TEXT_MODELS : ['gpt-4o-mini']
+      raw = await chatComReserva(client, models, [{ role: 'user', content: prompt }])
     }
 
     const match = raw.match(/\[[\s\S]*\]/)

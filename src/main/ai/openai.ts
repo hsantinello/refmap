@@ -11,6 +11,38 @@ import { buildVisionPrompt } from './visionPrompt'
 export const TOGETHER_VISION_MODELS = ['MiniMaxAI/MiniMax-M3', 'moonshotai/Kimi-K3']
 export const VISION_MAX_TOKENS = 4096
 
+// Modelos de TEXTO serverless no Together (tradução de tags e otimizador de
+// prompt). Conferido em 26/10/2026 com requisição real a /v1/chat/completions:
+// o Llama-3.3-70B-Instruct-Turbo passou a dar 400 "non-serverless", assim como
+// Llama 3.1/4, Mistral Small, DeepSeek-V3.1, GLM-4.7, gemma-4 e gpt-oss-20b.
+// Qwen3.7-Plus/3.8-Flash só aceitam stream. gpt-oss-120b é barato e rápido; o
+// MiniMax-M3 (o mesmo da visão) fica de reserva.
+export const TOGETHER_TEXT_MODELS = ['openai/gpt-oss-120b', 'MiniMaxAI/MiniMax-M3']
+
+// Tenta cada modelo da lista na ordem; se um recusar (fora do ar,
+// não-serverless, resposta vazia), passa ao próximo. Cancelamento não insiste.
+export async function chatComReserva(
+  client: OpenAI,
+  models: string[],
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  signal?: AbortSignal,
+): Promise<string> {
+  let lastErr: unknown = null
+  for (const model of models) {
+    try {
+      const completion = await client.chat.completions.create({ model, messages }, signal ? { signal } : undefined)
+      const text = semRaciocinio(completion.choices[0]?.message?.content ?? '')
+      if (text) return text
+      lastErr = new Error(`empty response from ${model}`)
+    } catch (err) {
+      if (signal?.aborted) throw err
+      lastErr = err
+      console.warn(`[chat] "${model}" falhou:`, err instanceof Error ? err.message : err)
+    }
+  }
+  throw lastErr
+}
+
 // Alguns modelos de raciocínio deixam o <think>…</think> dentro do texto.
 export function semRaciocinio(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
