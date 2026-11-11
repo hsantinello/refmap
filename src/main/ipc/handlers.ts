@@ -316,7 +316,9 @@ export function registerHandlers(janela: BrowserWindow): void {
         .replace(/^#{1,6}\s+/gm, '')       // ## headers at line start
         .replace(/#(?![0-9a-fA-F]{3,8}\b)/g, '') // any remaining # chars (keeps hex colors: #1E3A5F)
         .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')  // **bold**, *italic*, ***both***
-        .replace(/_{1,2}([^_]+)_{1,2}/g, '$1')    // __bold__, _italic_
+        // __bold__, _italic_ — só fora de palavras: snake_case (overall_soundscape,
+        // fully_preserved do MiniMax H3) virava "overallsoundscape".
+        .replace(/(^|[^\w])_{1,2}([^_\n]+)_{1,2}(?!\w)/gm, '$1$2')
         .replace(/`([^`]+)`/g, '$1')        // `code`
         .replace(/^\s*[-*+]\s+/gm, '')      // bullet points at start of line
         .replace(/^\s*\d+\.\s+/gm, '')      // numbered lists at start of line
@@ -330,7 +332,9 @@ export function registerHandlers(janela: BrowserWindow): void {
       // Patterns that indicate an intro/header line
       const introRe = /^(\*{1,2})?((here'?s?|aqui (est[aá]|vai)|voici|here is|below is|optimized prompt|prompt otimizado|prompt for|otimizado para|resultado|result|output|the (optimized|following|result)|segue)(\*{1,2})?[^a-z]*:?|#{1,3}\s)/i
       // Also strip lines that are entirely a header followed by optional colon (< 120 chars, no sentence structure)
-      const isHeaderLine = (l: string) => introRe.test(l) || (l.endsWith(':') && l.length < 120 && !/[.!?]/.test(l.slice(0, -1)))
+      // Campo snake_case ("subject_definitions:") é parte do formato, não cabeçalho.
+      const isCampo = (l: string) => /^[a-z]+(_[a-z]+)+:/.test(l)
+      const isHeaderLine = (l: string) => !isCampo(l) && (introRe.test(l) || (l.endsWith(':') && l.length < 120 && !/[.!?]/.test(l.slice(0, -1))))
       let start = 0
       for (let i = 0; i < Math.min(lines.length, 5); i++) {
         const line = lines[i].trim()
@@ -485,7 +489,7 @@ The sections, element lists, formulas and examples above describe the FULL vocab
       }
     }
     const finalize = (raw: string): string =>
-      asJson ? finalizeJson(raw) : (config.textoPosProcessar ?? (t => t))(cleanPrompt(stripIntro(raw.replace(/\\n/g, '\n'))))
+      asJson ? finalizeJson(raw) : (config.textoPosProcessar ?? (t => t))(cleanPrompt(stripIntro(raw.replace(/\\n/g, '\n'))), prompt)
 
     // SEMPRE uma chamada só. O 'en-strict' resolve o idioma no próprio prompt
     // (regra no topo do system, no topo da mensagem e colada no texto do usuário),

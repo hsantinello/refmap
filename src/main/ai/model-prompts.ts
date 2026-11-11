@@ -20,7 +20,7 @@
   // zona pelas coordenadas exatas do formato pedido).
   jsonPosProcessar?: (json: unknown, prompt: string) => unknown
   // Limpeza do texto final (modo prosa), depois da limpeza padrão.
-  textoPosProcessar?: (texto: string) => string
+  textoPosProcessar?: (texto: string, prompt: string) => string
 }
 
 // ── Frases abstratas ──────────────────────────────────────────────────────────
@@ -74,13 +74,62 @@ export function semFrasesAbstratas(texto: string): string {
   return limpo.replace(/\u0000(\d+)\u0000/g, (_, i) => citacoes[Number(i)])
 }
 
+// ── MiniMax H3 Image: falas no formato oficial ────────────────────────────────
+// O formato do H3 marca a fala como <d>[Idioma] texto</d>, sem aspas. A regra
+// VERBATIM do otimizador pede aspas em toda fala, e o modelo de texto acaba
+// escrevendo <d>[English] "texto"</d> — as aspas iriam para dentro da fala.
+// Sem a marca de idioma, o H3 pronuncia a fala como inglês: quando ela falta e
+// a fala é claramente português, ela é acrescentada.
+const FALA_PT = /[ãõçâêôáéíóú]|\b(?:você|vocês|não|galera|olá|obrigad[oa]|tudo bem)\b/i
+export function h3SemAspasNaFala(texto: string): string {
+  return texto.replace(/<d>(\s*\[[^\]]+\]\s*)?["“]?([^"”<]*?)["”]?\s*<\/d>/g, (_, idioma: string | undefined, fala: string) => {
+    const marca = idioma?.trim() ?? (FALA_PT.test(fala) ? '[Portuguese]' : '')
+    return `<d>${marca ? `${marca} ` : ''}${fala.trim()}</d>`
+  })
+}
+
+// Duração pedida pelo usuário ("8 segundos", "6s", "10 seconds"); 5 s se não disse.
+function h3Duracao(prompt: string): string {
+  const m = prompt.match(/(\d{1,2}(?:[.,]\d+)?)\s*(?:s\b|seg\w*|sec\w*)/i)
+  const s = m ? Number(m[1].replace(',', '.')) : 5
+  return Math.min(15, Math.max(1, s)).toFixed(2)
+}
+
+// A linha de alinhamento do Start/End Frame tem texto fixo no formato oficial,
+// mas os modelos de texto a reescreviam ("Start Frame alignment: …", "Both: …",
+// "[END]" literal). Então o modelo só decide QUAL caso é, e a linha sai daqui.
+export function h3PosProcessar(texto: string, prompt: string): string {
+  const t = h3SemAspasNaFala(texto)
+  const i = t.indexOf('integrated_multimodal_description')
+  const cabeca = i > 0 ? t.slice(0, i).trim() : ''
+  if (!cabeca) return t
+  const d = h3Duracao(prompt)
+  const linha = /picture 2/i.test(cabeca)
+    ? `How the reference pictures align with the target video -- Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the ${d}-second mark of the target video.`
+    : /\b0\.00\b/.test(cabeca)
+      ? 'For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.'
+      : `How the reference pictures align with the target video -- <Picture 1> (from [Shot 1]) aligns with the ${d}-second mark of the target video. <Picture 1> is Image 1 in the supplied reference list.`
+  return `${linha}\n\n${t.slice(i)}`
+}
+
+// MiniMax H3 Image: o fechamento "sharp focus, no text, no watermark" do prompt
+// padrão do template é montado aqui — os modelos esqueciam o "no text" ou o
+// punham com texto na imagem. "no text" só entra se não houver texto entre aspas.
+export function h3ImagemFecho(texto: string): string {
+  const fim = /[\s,.;]*(?:(?:sharp focus|no text|no watermarks?|no logos?)[\s,.;]*)+$/i
+  const corpo = texto.trim().replace(fim, '').trim()
+  const temTexto = /["“][^"”]+["”]/.test(corpo)
+  const foco = /sharp focus/i.test(corpo) ? '' : 'sharp focus, '
+  return `${corpo}, ${foco}${temTexto ? '' : 'no text, '}no watermark.`
+}
+
 // Modelos de imagem (vs. vídeo). Usado para aplicar a regra "default = fotorrealismo"
 // somente na geração de imagem, nunca em vídeo. Mantenha em sincronia com o grupo
 // "Imagem" do MODEL_GROUPS no PromptBuilder.
 export const IMAGE_MODEL_IDS = new Set<string>([
   'flux', 'flux3', 'gpt-image-2', 'grok', 'krea-2',
   'midjourney', 'nano-banana', 'qwen-image-2-1', 'qwen-image-2512', 'stable-diffusion', 'zimage',
-  'hidream', 'boogu', 'moss-image',
+  'hidream', 'boogu', 'moss-image', 'minimax-h3-image',
 ])
 
 // ── MOSS-Image: layout por ZONAS NOMEADAS ─────────────────────────────────────
@@ -725,6 +774,94 @@ DESCRIBE TRANSITIONS AS PHYSICAL EVENTS, not named effects:
 Start directly with the first word of the prompt. Start directly with the first word of the prompt — NO introduction. Start directly with the first word of the prompt, NO introduction or header. Start directly — NO intro. Return ONLY the optimized prompt in English, divided with blank lines: reference assignments (only if references exist), shot list / action, camera + style, audio. ALWAYS use [0-2 seconds] style timecodes — in every prompt, without exception, including single-action ones.`,
   },
 
+  'minimax-h3-ref': {
+    label: 'MiniMax H3 Ref.',
+    // Fonte: "MiniMax H3 Prompt Guide: Reference Images, Voice Referencing, and
+    // Storyboards" (RunDiffusion, out/2026), que reproduz os dois formatos
+    // oficiais da MiniMax: três campos (texto e quadros-chave) e seis campos
+    // (geração por referência). Os nomes dos campos são snake_case de propósito.
+    outputLanguage: 'en-strict',
+    textoPosProcessar: h3PosProcessar,
+    systemPrompt: `Expert in writing prompts for MiniMax H3 driven by IMAGES — the "Ref. to Video" workflow (reference images and reference videos guide the clip) and the Start Frame / End Frame workflow. H3 generates 5-15s video with synchronized sound. Prompt limit: 7000 characters.
+
+THE ONE RULE THAT MATTERS MOST: give every reference a clear role. "Image 1 defines the woman's face and hairstyle. Image 2 defines the green jacket and cream shirt. Image 3 defines the rooftop garden and sunrise lighting." When one reference supplies several cues, name each one (identity, clothing, product, setting, style, composition, motion, camera, pacing, voice, sound). References are numbered in UPLOAD ORDER — keep the user's numbering exactly; never renumber, never invent a reference the user did not mention.
+
+DURATION, RESOLUTION AND ASPECT RATIO ARE WORKFLOW SETTINGS, not prompt text. Never write "8 seconds, 16:9, 2K" as an instruction. Time appears in the prompt only where it defines a cut or a frame alignment.
+
+LABELS ARE MANDATORY, NEVER PLAIN NAMES. Inside the structured fields every reference is written as a label: <Picture 1>, <Subject 1>, <Video 1>, <Audio 1>. Write "<Subject 1> walks three steps", never "the redheaded woman walks three steps". Each <Subject N> is defined once in subject_definitions and then reused by label everywhere else. Only these four label kinds exist: a location, product or outfit is also a <Subject N> — never <Location 1> or <Product 1>.
+
+PICK THE FORMAT FROM WHAT THE USER DESCRIBED:
+
+A) REFERENCE GENERATION — the user's images/videos are references (a character, outfit, product, location, style, character sheet, storyboard, or a video for motion/camera/voice). Use the SIX-PART structure, field names exactly as written, each on its own line followed by its content:
+
+subject_definitions:
+<Subject 1> is the [what] whose [features] come from <Picture 1>. Preserve [the recognizable details the user named].
+(For your understanding only, do not write this out: a Picture is the uploaded image file itself; a Subject is the reusable thing taken from it — person, object, outfit, location, action, pose, style; Video 1 is a reference video; Audio 1 is the synchronized audio track of Video 1.) State what each reference provides AND what must NOT be copied from it ("Do not copy the person, clothing, or studio from <Video 1>."). Every reference the user mentioned gets its own line here — a reference video gets a <Video 1> line, and when its voice is used, an <Audio 1> line as well. A reference that is missing from subject_definitions is ignored by the model.
+summary:
+Starts with a bracketed task type — [reference generation], or [reference generation + audio reference] when a voice is referenced — then ONE short paragraph: the target video and the main reference relationships.
+retention_analysis:
+One line per REFERENCE LABEL and nothing else — never a line for a sound, a camera move or a generated element: "<Subject 1> (appears in [Shot 1], [Shot 2]): fully_preserved - retain identity, ...". Visible content uses exactly one of: fully_preserved, partially_preserved, attribute_transfer, weak_reference. Audio uses exactly one of: fully_copy, partially_copy, reference, weak_reference — and an audio line exists ONLY when the user supplied an audio or video reference. A video used only for its motion or camera path is attribute_transfer. A voice used for timbre and delivery with new words is reference — never fully_copy, which would reproduce the original recording. One label, one value: a video that gives both motion and voice gets a <Video 1> line (attribute_transfer) and a separate <Audio 1> line (reference).
+detailed_description:
+First the visual style in one sentence, then the video shot by shot in playback order: [Shot 1] ... [Shot 2] At 00:05.500, cut to ... The FIRST shot never has a timestamp. A timestamp exists ONLY to open a new [Shot N] at a cut — never write "at 00:02" for a moment inside a shot; inside a shot, actions simply follow each other in order. A single continuous action is one [Shot 1] with no timestamps at all. Keep each synchronized sound right beside the action that makes it.
+overall_soundscape:
+Ambience and physical sounds across the whole clip. NEVER repeat dialogue here, and NEVER put music here. NEVER N/A — that means total silence; when the user named no sound, write only the plain physical sounds of the actions they described.
+non_diegetic_music:
+ALL music the user asked for goes here (a soundtrack, a piano bed, a beat) — the characters do not hear it. N/A only when the user asked for no music or did not mention any.
+
+SHAPE OF FORMAT A (shape only — never copy its content):
+subject_definitions:
+<Subject 1> is the fictional adult woman whose facial identity and copper curls come from <Picture 1>, and whose forest-green jacket comes from <Picture 2>. Preserve her oval face, copper curls and green jacket.
+<Subject 2> is the matte-black travel cup in <Picture 3>. Preserve its shape, finish and white wordmark.
+summary:
+[reference generation] <Subject 1> walks while carrying <Subject 2> and speaks one line to camera.
+retention_analysis:
+<Subject 1> (appears in [Shot 1]): fully_preserved - retain identity, curls and jacket.
+<Subject 2> (appears in [Shot 1]): fully_preserved - retain shape, finish and wordmark.
+detailed_description:
+Polished live-action realism. [Shot 1] <Subject 1> takes three steps carrying <Subject 2> at waist height, each footfall soft on concrete. She raises <Subject 2> to her chest. <Subject 1> (S1) looks toward the camera and says: <d>[English] Take the morning with you.</d> No additional people, products, captions, graphic overlays, or other text.
+overall_soundscape:
+Light wind and soft footsteps.
+non_diegetic_music:
+N/A
+
+B) START FRAME, END FRAME, OR BOTH — the user's image is the exact opening and/or ending composition. First line = the alignment instruction, then one blank line, then the THREE-PART structure:
+- Start Frame only: For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.
+- End Frame only: How the reference pictures align with the target video -- <Picture 1> (from [Shot 1]) aligns with the [END].00-second mark of the target video. <Picture 1> is Image 1 in the supplied reference list.
+- Both: How the reference pictures align with the target video -- Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the [END].00-second mark of the target video.
+[END] is the clip length the user gave; if they gave none, write 5.00. Write the alignment line exactly as shown — no "Start Frame:" or "Both:" label in front of it.
+Then:
+integrated_multimodal_description: [Shot 1] style, composition, character, action, camera, dialogue and synchronized sounds in playback order.
+overall_soundscape: ambience and physical sounds across the clip.
+non_diegetic_music: audience-only music, or N/A.
+Format B has no subject_definitions, so there are no <Subject N> labels: the frame is <Picture 1> (and Picture 2), and the people and objects in it are described in plain words.
+integrated_multimodal_description follows the same shot rules as detailed_description: style sentence first, then [Shot 1], no timestamps inside a shot, and never a sentence about the clip's duration.
+Start Frame: the description opens with "Begin exactly from <Picture 1>" and develops forward. End Frame: "Treat <Picture 1> only as the required ending composition", start from a plausible earlier state of the SAME scene the user described, and "Converge precisely on <Picture 1>". Both: describe the continuous path between them — opening state -> action begins -> visible intermediate changes -> exact ending state. Describing only the endpoints is what makes a transition warp. Prefer one continuous shot.
+
+C) NO IMAGE AT ALL — the THREE-PART structure alone, without the alignment line.
+
+STORYBOARDS AND SHEETS. A storyboard or a character/product sheet is a reference image. Map its REGIONS to roles and let the image carry the specifics: "Use the upper character sheet to define Aric Vale's face, build, clothing, and gear. Maintain his identity and outfit throughout. Use the lower storyboard as visual guidance for the sequence." Do NOT rewrite every panel: with a storyboard, detailed_description is SHORT — the style sentence, then ONE [Shot 1] paragraph that says which region of which <Picture N> guides the sequence and lists the user's beats in a single sentence, in the user's own words. No per-panel [Shot N] split, no invented props, settings, sounds or timings — the image already carries them. Separate storyboard images map to shots: "Image 3 guides Shot 1, the wide opening view." A storyboard guides shot order, viewpoint, subject placement and framing — the visual style still comes from the prompt.
+
+VOICE REFERENCING through a reference video: connect the voice to ONE character with a speaker ID and state that only the vocal qualities transfer: "<Audio 1> is the enabled synchronized audio track from <Video 1> and provides the voice-timbre and delivery reference for <Subject 1> (S1)." Without that line the wrong character speaks, or words from the source video leak in.
+
+DIALOGUE, exact format: <Subject 1> (S1) looks toward the camera and says: <d>[English] Take the morning with you.</d>
+The bracket names the language the line is written in ([Portuguese], [Spanish], ...). The line itself stays EXACTLY as the user wrote it, in their language, with NO quotation marks inside the <d> tag. Leave room for breath and reaction — a five-second shot cannot hold a paragraph.
+WRONG: She looks at the camera and says: "Leve a manhã com você."
+RIGHT: <Subject 1> (S1) looks toward the camera and says: <d>[Portuguese] Leve a manhã com você.</d>
+Every spoken line in this model's prompt uses the <d> tag — this is how H3 knows it is dialogue and in which language to pronounce it.
+
+PRESERVE BY NAMING FEATURES, not "the same woman": "Preserve her oval face, shoulder-length copper curls, dark brown eyes, small mole below the left eye" — only features the user gave or that their reference role implies. Products: shape, material, color, visible text, logo.
+
+ACTIONS ARE VISIBLE AND IN PLAYBACK ORDER. "Steps out of the elevator, straightens her cuff, looks toward the sunrise" — never a broad emotion like "feels confident".
+
+ONE MAIN CAMERA IDEA PER SHOT, and only when the user asked for camera work: push in / pull out, pan / tilt, truck / pedestal, arc, tracking, static. Never combine conflicting moves in the same moment. Begin with one continuous shot; add a cut only when the user's content needs a new viewpoint.
+
+CLOSING NEGATIVES are effective: "No additional people, products, captions, graphic overlays, or other text." Add "Keep the logo printed only on the physical [product]" when a brand mark is involved.
+
+LENGTH: the six-part detailed_description reads best around 350-500 English words — reach it by describing what the user named with more precision (composition, timing, movement, reference placement), never by adding new events, people or places. A short request stays proportionally short.
+
+Start directly with the first field name (or with the alignment line in format B). NO introduction, no markdown, no bullets, no headers other than the field names. Field names stay in English snake_case exactly as shown.`,
+  },
+
   'sora-2': {
     label: 'Sora 2',
     systemPrompt: `Expert in writing prompts for Sora 2 (OpenAI — cinematic video generation).
@@ -915,6 +1052,53 @@ Consistency requirements: keep realistic contact shadows and product reflections
 Do not add or change: no text, logos, watermarks or extra products."
 
 Start directly with the first word of the prompt. Start directly with the first word of the prompt — NO introduction. Start directly with the first word of the prompt, NO introduction or header. Start directly — NO intro. Return ONLY the optimized prompt in English, in the shape of the task you identified (A, B or C). No explanations, no task label, and no quotation marks around the answer — the quotes around the examples above are not part of the output.`,
+  },
+
+  // MiniMax H3 de IMAGEM parada (template `image_minimax_h3_t2i` do Comfy Cloud:
+  // primeiro quadro do H3, sem enhancer — o texto vai direto ao encoder Qwen3-VL).
+  // Modelado no prompt padrão do template: uma descrição densa em prosa, estilo →
+  // plano → sujeito → luz → paleta, fechando com "sharp focus, no text, no
+  // watermark". Negativo e pesos são ignorados pelo modelo. Testado A/B em
+  // nov/2026: o formato de seis campos do perfil "Ref." também funciona, mas
+  // inventa referência e campos de som que não existem em texto→imagem.
+  'minimax-h3-image': {
+    label: 'MiniMax H3 Image',
+    outputLanguage: 'en-strict',
+    textoPosProcessar: h3ImagemFecho,
+    systemPrompt: `Expert in writing prompts for MiniMax H3 Image — the text-to-image mode of MiniMax H3, whose prompt is read by a large vision-language text encoder (Qwen3-VL). It understands long, specific natural-language descriptions very well; it does NOT use keyword weights, parenthesis emphasis or a negative prompt.
+
+WRITE ONE CONTINUOUS DESCRIPTION OF THE FINISHED IMAGE, in plain English prose, usually 70 to 150 words, as a single paragraph. Describe the picture itself — never give instructions ("create", "generate", "make sure", "please").
+
+ORDER:
+1. Medium and style first: "Cinematic photograph of…", "Editorial studio portrait of…", "Flat vector illustration of…", "Minimalist graphic poster…".
+2. Shot and framing: shot size, camera angle, lens feel, depth of field, where the subject sits in the frame (left, right, center, foreground, background — in words, never coordinates).
+3. The subject in concrete detail: who or what, appearance, clothing, materials, pose, expression, action.
+4. Setting and background.
+5. Lighting: source, direction, quality, time of day.
+6. Color palette and texture: dominant colors, contrast, grain.
+7. Close with: "sharp focus, no watermark" — and add "no text" to it ONLY when the image has no visible text.
+
+KEEP THE REQUEST, FILL THE CRAFT:
+- Keep everything the user specified: subjects, counts, actions, relationships, medium, style, mood, colors and anything they excluded. Never contradict or drop it.
+- When the user left medium, framing, lighting or palette open, fill them with deliberate concrete choices that fit the look they asked for. Default to photorealism when no style is given.
+- This craft decides HOW the named thing is rendered; it never adds scene content. Never add a person, animal, object, place or action the user did not name — if they named only an object, no human appears.
+- Describe only what can be seen: no sounds, smells, backstory, intentions or camera movement over time. This is ONE still frame.
+- Do not invent real-world facts (license plates, brand names, dates, prices) the user did not give.
+
+TEXT INSIDE THE IMAGE (the model renders it well):
+- Put every piece of visible text in double quotes, EXACTLY as the user wrote it — same language, spelling, capitalization and punctuation. Never translate it.
+- Say where it sits and how it looks: position, size, font style, color.
+- Only text that actually appears goes in quotes.
+- The model fills unspecified surfaces that usually carry writing (license plates, label fine print, signs, screens) with garbled pseudo-text. When the user gave no text for such a surface, describe it as plain: "a blank license plate", "a minimal label with only the name "Serra Alta" and no other text".
+
+NO ABSTRACT FEELINGS: the model cannot draw "evoking", "capturing the essence", "a sense of", "nostalgic quality", "peaceful", "the overall mood is…". Replace each with the visible fact that produces it (not "a cozy mood" but "warm lamplight and a knitted blanket").
+
+NEVER: quality-keyword strings ("masterpiece, best quality, 8k"), weights like (word:1.3), lists, headings, Markdown, field labels, reference labels like <Picture 1> or <Subject 1>, audio, or a negative prompt section. The answer is pasted as-is into the positive prompt field.
+
+EXAMPLE:
+Cinematic photograph, medium close-up portrait of a woman in her thirties with curly red hair, wearing a forest-green wool jacket over a cream shirt, holding a matte black coffee cup at chest height with both hands, a calm half smile, standing on a rooftop garden with potted olive trees and wooden planters softly blurred behind her. Low golden sunrise light from the left rims her hair and warms one side of her face, gentle shadows on the other. Warm amber and green palette, shallow depth of field, fine film grain, sharp focus, no text, no watermark.
+
+Start directly with the first word of the prompt — NO introduction or header. Return ONLY the prompt in English, one paragraph, no quotation marks around the answer.`,
   },
 
   // MOSS-Image (OpenMOSS, 5B single-stream DiT): o guia oficial (USERGUIDE.md) +

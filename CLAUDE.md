@@ -231,6 +231,22 @@ main resolve pelo idioma do SO (`app.getLocale()`) e o renderer lê via
   regra no prompt; nunca toca texto entre aspas. Fontes do perfil: o USERGUIDE do
   MOSS e o system prompt do enhancer no template `image_moss_image_base_t2i` do
   Comfy Cloud.
+- **MiniMax H3 Image** (`minimax-h3-image`, grupo Imagem) é o texto→imagem do
+  H3 (template `image_minimax_h3_t2i` do Comfy Cloud, sem enhancer): um parágrafo
+  de prosa estilo → plano → sujeito → luz → paleta, fechando com "sharp focus, no
+  watermark" (+ "no text" só se não houver texto). NÃO confundir com o de baixo.
+- **MiniMax H3 Ref.** (`minimax-h3-ref`, grupo Vídeo — é o H3 guiado por
+  imagens: "Ref. to Video" e Start/End Frame). Segue os formatos OFICIAIS do
+  guia da RunDiffusion: seis campos snake_case (`subject_definitions` …
+  `non_diegetic_music`) para referências, três campos para quadros-chave, rótulos
+  `<Picture N>/<Subject N>/<Video 1>/<Audio 1>` e fala `<d>[Idioma] texto</d>`.
+  `h3PosProcessar` monta a linha de alinhamento do Start/End Frame (texto fixo;
+  os modelos a reescreviam) com a duração do pedido e tira aspas de dentro do
+  `<d>`. Por isso `textoPosProcessar` recebe também o pedido. O `cleanPrompt` do
+  handler só remove `_itálico_` fora de palavras — antes ele comia o snake_case
+  ("overall_soundscape" → "overallsoundscape"), e o `stripIntro` não trata
+  linha `campo_snake:` como cabeçalho. O "MiniMax H3" antigo (timecodes
+  `[0-2 seconds]`) continua como está.
 - `lib/tagExamples.ts`
 
 Esses arquivos estão na lista `IGNORADOS` de `scripts/check-i18n.ts`.
